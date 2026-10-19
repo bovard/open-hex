@@ -38,6 +38,10 @@ service cloud.firestore {
       allow read: if true;
       allow write: if false;
     }
+    match /posts/{postId} {
+      allow read: if true;
+      allow write: if false;
+    }
     // API keys are private — only Cloud Functions (admin SDK) can read
     match /apiKeys/{key} {
       allow read: if false;

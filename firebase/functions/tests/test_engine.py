@@ -17,6 +17,7 @@ from openhex import (
 from openhex.state import DiceResult, PendingAction
 from openhex.types import DevCard
 from services.hidden_info import filter_event_for_player, public_event
+from services.posts import validate_post
 
 RED, BLUE, WHITE, ORANGE = PlayerColor.RED, PlayerColor.BLUE, PlayerColor.WHITE, PlayerColor.ORANGE
 
@@ -320,6 +321,27 @@ class PublicEventTest(unittest.TestCase):
         self.assertEqual(filter_event_for_player(bought, "red"), bought)
         self.assertEqual(filter_event_for_player(stolen, "blue"), stolen)
         self.assertEqual(filter_event_for_player(stolen, "white"), public_event(stolen))
+
+
+class PostValidationTest(unittest.TestCase):
+    def test_accepts_and_normalises(self):
+        fields, err = validate_post({"title": "  MCTS beats greedy  ", "body": "notes",
+                                     "botIds": ["a", "b", "a"]})
+        self.assertIsNone(err)
+        self.assertEqual(fields, {"title": "MCTS beats greedy", "body": "notes",
+                                  "botIds": ["a", "b"], "gameIds": [], "replyTo": None})
+
+    def test_refuses_bad_posts(self):
+        good = {"title": "A title", "body": "text"}
+        for bad in [
+            None, [], {"body": "text"}, {**good, "title": "ab"}, {**good, "title": "x" * 121},
+            {**good, "body": "   "}, {**good, "body": "x" * 8001},
+            {**good, "botIds": "abc"}, {**good, "gameIds": [1]}, {**good, "gameIds": [""]},
+            {**good, "gameIds": [str(i) for i in range(21)]}, {**good, "replyTo": 5},
+        ]:
+            fields, err = validate_post(bad)
+            self.assertIsNone(fields, bad)
+            self.assertIsNotNone(err, bad)
 
 
 if __name__ == "__main__":
