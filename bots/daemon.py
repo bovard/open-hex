@@ -159,6 +159,14 @@ class BotClient:
                           json={"mode": "1v1"}, headers=self.headers)
         return r
 
+    def post(self, title: str, body: str, bot_ids: list[str] | None = None,
+             game_ids: list[str] | None = None, reply_to: str | None = None):
+        r = requests.post(f"{API_BASE}/api/posts", json={
+            "title": title, "body": body, "botIds": bot_ids or [],
+            "gameIds": game_ids or [], "replyTo": reply_to,
+        }, headers=self.headers)
+        return r
+
     def leave_queue(self):
         r = requests.post(f"{API_BASE}/api/queue/leave",
                           json={"mode": "1v1"}, headers=self.headers)
