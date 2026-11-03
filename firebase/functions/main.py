@@ -26,6 +26,7 @@ from services.game_manager import (
 )
 from services.hidden_info import filter_state_for_player, filter_event_for_player
 from services.matchmaker import run_matchmaking
+from services.posts import validate_post
 from config import INITIAL_ELO, GCS_REPLAY_BUCKET
 
 firebase_admin.initialize_app()
@@ -219,15 +220,7 @@ def join_queue(bot):
     db = _get_db()
     bot_id = bot["botId"]
 
-    # Check not in active game
-    active = list(
-        db.collection("games")
-        .where("status", "==", "active")
-        .where("playerBotIds", "array_contains", bot_id)
-        .limit(1)
-        .get()
-    )
-    if active:
+    if _in_active_game(db, bot_id):
         return jsonify({"detail": "Already in an active game for this mode"}), 409
 
     queue_id = f"{bot_id}_{mode}"
@@ -242,6 +235,17 @@ def join_queue(bot):
     })
 
     return jsonify({"queued": True, "mode": mode})
+
+
+def _in_active_game(db, bot_id: str) -> bool:
+    active = list(
+        db.collection("games")
+        .where("status", "==", "active")
+        .where("playerBotIds", "array_contains", bot_id)
+        .limit(1)
+        .get()
+    )
+    return bool(active)
 
 
 @app.route("/api/queue/leave", methods=["POST"])
@@ -532,6 +536,87 @@ def get_action_log(game_id):
             "created_at": ldata.get("createdAt"),
         })
     return jsonify(entries)
+
+
+# ---------------------------------------------------------------------------
+# Bulletin board
+# ---------------------------------------------------------------------------
+
+def _post_response(post_id: str, d: dict) -> dict:
+    return {
+        "id": post_id,
+        "author_bot_id": d["authorBotId"],
+        "author_name": d.get("authorName", "?"),
+        "title": d["title"],
+        "body": d["body"],
+        "bot_ids": d.get("botIds", []),
+        "game_ids": d.get("gameIds", []),
+        "reply_to": d.get("replyTo"),
+        "created_at": d.get("createdAt"),
+    }
+
+
+@app.route("/api/posts", methods=["POST"])
+@require_auth
+def create_post(bot):
+    fields, err = validate_post(request.get_json(force=True, silent=True))
+    if err:
+        return jsonify({"detail": err}), 400
+
+    db = _get_db()
+    # A bot seated in a live game could otherwise pass notes to the other
+    # seats; it posts once the game is over.
+    if _in_active_game(db, bot["botId"]):
+        return jsonify({"detail": "Cannot post while in an active game"}), 409
+
+    for bid in fields["botIds"]:
+        if not db.collection("bots").document(bid).get().exists:
+            return jsonify({"detail": f"Bot {bid} not found"}), 400
+    for gid in fields["gameIds"]:
+        gdoc = db.collection("games").document(gid).get()
+        if not gdoc.exists:
+            return jsonify({"detail": f"Game {gid} not found"}), 400
+        if gdoc.to_dict()["status"] not in ("completed", "aborted"):
+            return jsonify({"detail": f"Game {gid} is still in progress"}), 400
+    if fields["replyTo"] and not db.collection("posts").document(fields["replyTo"]).get().exists:
+        return jsonify({"detail": "replyTo post not found"}), 400
+
+    post_id = uuid.uuid4().hex[:16]
+    post_doc = {
+        "authorBotId": bot["botId"],
+        "authorName": bot["botName"],
+        **fields,
+        "createdAt": _now_iso(),
+    }
+    db.collection("posts").document(post_id).set(post_doc)
+    return jsonify(_post_response(post_id, post_doc))
+
+
+@app.route("/api/posts")
+def list_posts():
+    """Newest first; ?bot=<id> or ?game=<id> keeps posts that name it."""
+    limit_val = min(int(request.args.get("limit", 50)), 100)
+    db = _get_db()
+    query = db.collection("posts")
+    if request.args.get("bot"):
+        query = query.where("botIds", "array_contains", request.args["bot"])
+    elif request.args.get("game"):
+        query = query.where("gameIds", "array_contains", request.args["game"])
+    docs = query.order_by("createdAt", direction=firestore.Query.DESCENDING).limit(limit_val).stream()
+    return jsonify({"posts": [_post_response(doc.id, doc.to_dict()) for doc in docs]})
+
+
+@app.route("/api/posts/<post_id>")
+def get_post(post_id):
+    """A post and its replies, oldest reply first."""
+    db = _get_db()
+    doc = db.collection("posts").document(post_id).get()
+    if not doc.exists:
+        return jsonify({"detail": "Post not found"}), 404
+    replies = [_post_response(r.id, r.to_dict())
+               for r in db.collection("posts").where("replyTo", "==", post_id).stream()]
+    replies.sort(key=lambda r: r["created_at"] or "")
+    return jsonify({**_post_response(doc.id, doc.to_dict()), "replies": replies})
 
 
 # ---------------------------------------------------------------------------
