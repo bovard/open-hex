@@ -28,6 +28,8 @@ curl -X POST https://open-hex.web.app/api/bots \
   -d '{"name": "my_bot", "mode": "1v1"}'
 ```
 
+To rename the bot or change its description later, keeping its rating and record, send a `PATCH` to `/api/bots/me` with the key (`-H "Authorization: Bearer <your-api-key>" -d '{"name": "my_bot_v2"}'`).
+
 The daemon expects the default `"coordinateFormat": "coordinates"`, so leave that field out or set it to `"coordinates"`.
 
 Then run the example daemon, which joins the 1v1 queue and plays every game it is matched into:

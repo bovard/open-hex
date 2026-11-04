@@ -41,13 +41,19 @@ def _get_db():
     return firestore.client()
 
 
+def _api_key() -> str | None:
+    """The key in an Authorization: Bearer <api_key> header, or None."""
+    parts = request.headers.get("Authorization", "").split()
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        return None
+    return parts[1]
+
+
 def _get_current_bot():
     """Extract bot info from Authorization: Bearer <api_key> header."""
-    auth = request.headers.get("Authorization", "")
-    parts = auth.split()
-    if len(parts) != 2 or parts[0].lower() != "bearer":
+    api_key = _api_key()
+    if api_key is None:
         return None, (jsonify({"detail": "Invalid authorization header"}), 401)
-    api_key = parts[1]
     db = _get_db()
     doc = db.collection("apiKeys").document(api_key).get()
     if not doc.exists:
@@ -69,6 +75,30 @@ def require_auth(f):
 # Bot endpoints
 # ---------------------------------------------------------------------------
 
+NAME_RULE = "Name must be 3-32 characters"
+DESCRIPTION_RULE = "Description must be 280 characters or fewer"
+
+
+def _name_ok(name: str) -> bool:
+    return 3 <= len(name) <= 32
+
+
+def _description_ok(description: str) -> bool:
+    return len(description) <= 280
+
+
+def _name_taken(db, name: str, mode: str, exclude_id: str | None = None) -> bool:
+    """Whether another bot in this mode already has this name."""
+    docs = (
+        db.collection("bots")
+        .where("name", "==", name)
+        .where("mode", "==", mode)
+        .limit(2)
+        .stream()
+    )
+    return any(doc.id != exclude_id for doc in docs)
+
+
 @app.route("/api/bots", methods=["POST"])
 def register_bot():
     data = request.get_json(force=True)
@@ -77,26 +107,18 @@ def register_bot():
     coord_fmt = data.get("coordinateFormat", "coordinates")
     description = data.get("description", "").strip()
 
-    if not name or len(name) < 3 or len(name) > 32:
-        return jsonify({"detail": "Name must be 3-32 characters"}), 400
+    if not _name_ok(name):
+        return jsonify({"detail": NAME_RULE}), 400
     if mode not in ("1v1", "4p"):
         return jsonify({"detail": "Mode must be '1v1' or '4p'"}), 400
     if coord_fmt not in ("coordinates", "indices"):
         return jsonify({"detail": "coordinateFormat must be 'coordinates' or 'indices'"}), 400
-    if len(description) > 280:
-        return jsonify({"detail": "Description must be 280 characters or fewer"}), 400
+    if not _description_ok(description):
+        return jsonify({"detail": DESCRIPTION_RULE}), 400
 
     db = _get_db()
 
-    # Check uniqueness: name + mode
-    existing = list(
-        db.collection("bots")
-        .where("name", "==", name)
-        .where("mode", "==", mode)
-        .limit(1)
-        .stream()
-    )
-    if existing:
+    if _name_taken(db, name, mode):
         return jsonify({
             "detail": "Bot name already taken for this mode. If this is your bot, use your existing API key."
         }), 409
@@ -154,6 +176,51 @@ def get_self(bot):
     if not doc.exists:
         return jsonify({"detail": "Bot not found"}), 404
     return jsonify({"id": doc.id, **_bot_response(doc.to_dict())})
+
+
+@app.route("/api/bots/me", methods=["PATCH"])
+@require_auth
+def update_self(bot):
+    """Rename the bot or change its description, keeping its id, key and rating.
+
+    Games already created keep the name they were created with; games created
+    from now on, the leaderboard and the bot's page show the new one.
+    """
+    data = request.get_json(force=True, silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"detail": "Body must be a JSON object"}), 400
+    unknown = sorted(set(data) - {"name", "description"})
+    if unknown:
+        return jsonify({"detail": f"Only name and description can be changed, not {', '.join(unknown)}"}), 400
+    if not data:
+        return jsonify({"detail": "Nothing to change: send name, description or both"}), 400
+
+    changes = {}
+    if "name" in data:
+        if not isinstance(data["name"], str) or not _name_ok(data["name"].strip()):
+            return jsonify({"detail": NAME_RULE}), 400
+        changes["name"] = data["name"].strip()
+    if "description" in data:
+        if not isinstance(data["description"], str) or not _description_ok(data["description"].strip()):
+            return jsonify({"detail": DESCRIPTION_RULE}), 400
+        changes["description"] = data["description"].strip()
+
+    db = _get_db()
+    ref = db.collection("bots").document(bot["botId"])
+    doc = ref.get()
+    if not doc.exists:
+        return jsonify({"detail": "Bot not found"}), 404
+    current = doc.to_dict()
+
+    renamed = "name" in changes and changes["name"] != current.get("name")
+    if renamed and _name_taken(db, changes["name"], current.get("mode", "1v1"), exclude_id=doc.id):
+        return jsonify({"detail": "Bot name already taken for this mode"}), 409
+
+    ref.update(changes)
+    if renamed:
+        # The key document carries the name the action log records.
+        db.collection("apiKeys").document(_api_key()).update({"botName": changes["name"]})
+    return jsonify({"id": doc.id, **_bot_response({**current, **changes})})
 
 
 @app.route("/api/bots/<bot_id>")
