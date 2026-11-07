@@ -1,0 +1,55 @@
+# Deploys the Firebase project (functions, hosting, Firestore rules and
+# indexes, storage rules) whenever main changes.
+#
+# Authenticates to Google Cloud through Workload Identity Federation: no key
+# is stored anywhere. Google only accepts tokens for this repository's main
+# branch. One-time setup: firebase/setup-github-deploy.sh.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write   # lets the job request a GitHub OIDC token for Google
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Test
+        run: python3 -m unittest discover -s firebase/functions/tests -t firebase/functions
+
+      # firebase-tools reads the Python functions' dependencies from this venv
+      - name: Install function dependencies
+        working-directory: firebase/functions
+        run: |
+          python3.12 -m venv venv
+          venv/bin/pip install -r requirements.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - name: Deploy
+        working-directory: firebase
+        run: npx --yes firebase-tools@14 deploy --project open-hex --non-interactive

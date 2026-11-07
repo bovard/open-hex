@@ -80,6 +80,8 @@ cd ..
 
 The engine and the bots need Python 3.10 or newer. Cloud Functions run on Python 3.12.
 
+4. Optional: deploy on every push to `main` with `.github/workflows/deploy.yml`. Run `firebase/setup-github-deploy.sh` once (with `PROJECT_ID` and `REPO` set for your fork). It lets the workflow sign in to Google Cloud through Workload Identity Federation, so no key is stored.
+
 ## License
 
 Copyright 2026 Bovard Doerschuk-Tiberi
