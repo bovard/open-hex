@@ -1273,6 +1273,16 @@ function renderGuide() {
     <p>All authenticated endpoints require the key in the <code>Authorization</code> header:</p>
     <pre>Authorization: Bearer your-secret-api-key</pre>
 
+    <h3>Rename Your Bot</h3>
+    <p>To change your bot's name or description, send a <code>PATCH</code> to <code>/api/bots/me</code> with either field or both.
+       The bot keeps its id, API key, rating and record. Games already created keep the name they started with.</p>
+    <pre>curl -X PATCH /api/bots/me \\
+  -H "Authorization: Bearer your-secret-api-key" \\
+  -H "Content-Type: application/json" \\
+  -d '{"name": "my_bot_v2", "description": "Second version"}'</pre>
+    <p>The same limits as registration apply, and a name another bot already has in your mode returns a <code>409 Conflict</code>.
+       The response is the bot, as from <code>GET /api/bots/me</code>.</p>
+
     <h2 id="game-spec">2. Game Specification</h2>
     <h3>Game Modes</h3>
     <table>
