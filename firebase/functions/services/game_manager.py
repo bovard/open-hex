@@ -194,12 +194,14 @@ def _log_action(db, game_id: str, bot_id: str, bot_name: str,
     db.collection("games").document(game_id).collection("actionLog").add(entry)
 
 
-def process_action(game_id: str, bot_id: str, bot_name: str, action_dict: dict,
+def process_action(game_id: str, bot_id: str, action_dict: dict,
                     *, duration_ms: int | None = None, auto: bool = False) -> dict:
     """Process a submitted action using a Firestore transaction for concurrency.
 
     `auto` marks a move the server makes for a seat past its deadline
-    (`check_timeouts`); a move of the seat's own clears its timeout strikes."""
+    (`check_timeouts`); a move of the seat's own clears its timeout strikes.
+    The action log names the bot as its seat does, the name the game was
+    created with, so a bot renamed mid-game keeps one name in that game."""
     action_dict = resolve_action_indices(action_dict)
 
     # Sanitize duration_ms: must be a non-negative integer
@@ -232,6 +234,7 @@ def process_action(game_id: str, bot_id: str, bot_name: str, action_dict: dict,
         for p in game["players"]:
             if p["botId"] == bot_id:
                 bot_color = p["color"]
+                seat_name = p.get("name", "?")
                 break
         if bot_color is None:
             return {"success": False, "events": [], "error": "You are not in this game"}
@@ -248,7 +251,7 @@ def process_action(game_id: str, bot_id: str, bot_name: str, action_dict: dict,
             action = _action_from_json(action_dict_copy)
         except Exception as e:
             return {"success": False, "events": [], "error": f"Invalid action: {e}",
-                    "_log": ("fail", action_dict_copy)}
+                    "_log": ("fail", action_dict_copy, seat_name)}
 
         # Execute with the secret engine seed, never the board seed
         action_count = game["actionCount"]
@@ -259,7 +262,7 @@ def process_action(game_id: str, bot_id: str, bot_name: str, action_dict: dict,
 
         if not result.success:
             return {"success": False, "events": [], "error": result.error,
-                    "_log": ("fail", action_dict_copy)}
+                    "_log": ("fail", action_dict_copy, seat_name)}
 
         new_state = result.state
         new_action_count = action_count + 1
@@ -352,7 +355,7 @@ def process_action(game_id: str, bot_id: str, bot_name: str, action_dict: dict,
             "error": None,
             "_event_data": event_data_list,
             "_split_events": bool(game.get("privateEvents")),
-            "_log": ("ok", action_dict_copy),
+            "_log": ("ok", action_dict_copy, seat_name),
             "_completed": status == "completed",
             "_game_id": game_id,
             "_winner_bot_id": winner_bot_id,
@@ -379,9 +382,10 @@ def process_action(game_id: str, bot_id: str, bot_name: str, action_dict: dict,
         game_ref.collection("events").document(seq_str).set(ed)
 
     if log_info:
-        success = log_info[0] == "ok"
+        outcome, logged_action, seat_name = log_info
+        success = outcome == "ok"
         error = result.get("error") if not success else None
-        _log_action(db, game_id, bot_id, bot_name, log_info[1], success, error,
+        _log_action(db, game_id, bot_id, seat_name, logged_action, success, error,
                     duration_ms=dur_ms if success else None, auto=auto)
 
     if completed and winner_bid:
@@ -632,8 +636,7 @@ def check_timeouts() -> int:
             if action is None:
                 struck_out.add(color)
                 continue
-            result = process_action(game_id, seat["botId"], seat["name"],
-                                    _action_to_json(action), auto=True)
+            result = process_action(game_id, seat["botId"], _action_to_json(action), auto=True)
             if not result["success"]:
                 struck_out.add(color)
                 continue

@@ -12,6 +12,7 @@ import importlib
 import sys
 import types
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 try:
@@ -181,7 +182,7 @@ class UpdateBotTest(unittest.TestCase):
         self.assertEqual((body["elo_1v1"], body["games_1v1"], body["wins_1v1"]),
                          (1768.5, 423, 290))
         self.assertEqual(self.db.data["bots"][bot_id]["name"], "new_name")
-        self.assertEqual(self.db.data["apiKeys"][key]["botName"], "new_name")
+        self.assertIn("renamedAt", self.db.data["bots"][bot_id])
         me = self.client.get("/api/bots/me", headers={"Authorization": f"Bearer {key}"})
         self.assertEqual(me.get_json()["name"], "new_name")
         public = self.client.get(f"/api/bots/{bot_id}").get_json()
@@ -216,6 +217,30 @@ class UpdateBotTest(unittest.TestCase):
         self.patch(key, {"name": "after"})
         self.assertEqual(self.client.post("/api/bots", json={"name": "after", "mode": "1v1"}).status_code, 409)
         self.register("before")  # the old name is free again
+
+    def test_second_rename_within_a_day_refused(self):
+        bot_id, key = self.register("first")
+        self.assertEqual(self.patch(key, {"name": "second"}).status_code, 200)
+
+        r = self.patch(key, {"name": "third"})
+
+        self.assertEqual(r.status_code, 429)
+        self.assertGreater(int(r.headers["Retry-After"]), 0)
+        self.assertEqual(self.db.data["bots"][bot_id]["name"], "second")
+        # The description can still change, and resending the current name is no rename
+        r = self.patch(key, {"name": "second", "description": "d"})
+        self.assertEqual(r.status_code, 200, r.get_json())
+
+    def test_rename_allowed_again_after_a_day(self):
+        bot_id, key = self.register("first")
+        self.patch(key, {"name": "second"})
+        a_day_ago = datetime.now(timezone.utc) - timedelta(seconds=self.main.RENAME_COOLDOWN_SECONDS + 60)
+        self.db.data["bots"][bot_id]["renamedAt"] = a_day_ago.isoformat()
+
+        r = self.patch(key, {"name": "third"})
+
+        self.assertEqual(r.status_code, 200, r.get_json())
+        self.assertEqual(self.db.data["bots"][bot_id]["name"], "third")
 
     def test_bad_requests(self):
         bot_id, key = self.register("mine")

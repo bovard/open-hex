@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 
 import firebase_admin
@@ -26,7 +27,7 @@ from services.game_manager import (
 )
 from services.hidden_info import filter_state_for_player, filter_event_for_player
 from services.matchmaker import run_matchmaking
-from config import INITIAL_ELO, GCS_REPLAY_BUCKET
+from config import INITIAL_ELO, GCS_REPLAY_BUCKET, RENAME_COOLDOWN_SECONDS
 
 firebase_admin.initialize_app()
 
@@ -142,7 +143,6 @@ def register_bot():
     # Store API key in separate collection (document ID = key for O(1) lookup)
     db.collection("apiKeys").document(api_key).set({
         "botId": bot_id,
-        "botName": name,
         "mode": mode,
         "coordinateFormat": coord_fmt,
     })
@@ -184,7 +184,9 @@ def update_self(bot):
     """Rename the bot or change its description, keeping its id, key and rating.
 
     Games already created keep the name they were created with; games created
-    from now on, the leaderboard and the bot's page show the new one.
+    from now on, the leaderboard and the bot's page show the new one. A bot
+    may change its name once every RENAME_COOLDOWN_SECONDS; its description
+    as often as it likes.
     """
     data = request.get_json(force=True, silent=True)
     if not isinstance(data, dict):
@@ -213,13 +215,22 @@ def update_self(bot):
     current = doc.to_dict()
 
     renamed = "name" in changes and changes["name"] != current.get("name")
-    if renamed and _name_taken(db, changes["name"], current.get("mode", "1v1"), exclude_id=doc.id):
-        return jsonify({"detail": "Bot name already taken for this mode"}), 409
+    if renamed:
+        now = datetime.now(timezone.utc)
+        if current.get("renamedAt"):
+            next_rename = (datetime.fromisoformat(current["renamedAt"])
+                           + timedelta(seconds=RENAME_COOLDOWN_SECONDS))
+            if now < next_rename:
+                resp = jsonify({"detail": f"A bot can be renamed once every "
+                                          f"{RENAME_COOLDOWN_SECONDS // 3600} hours; "
+                                          f"the next rename is allowed at {next_rename.isoformat()}"})
+                resp.headers["Retry-After"] = str(int((next_rename - now).total_seconds()) + 1)
+                return resp, 429
+        if _name_taken(db, changes["name"], current.get("mode", "1v1"), exclude_id=doc.id):
+            return jsonify({"detail": "Bot name already taken for this mode"}), 409
+        changes["renamedAt"] = now.isoformat()
 
     ref.update(changes)
-    if renamed:
-        # The key document carries the name the action log records.
-        db.collection("apiKeys").document(_api_key()).update({"botName": changes["name"]})
     return jsonify({"id": doc.id, **_bot_response({**current, **changes})})
 
 
@@ -517,8 +528,7 @@ def submit_action(bot, game_id):
     # Normalize API field names to internal names (edge->vertices, hex->location)
     action_dict = normalize_action_fields(action_dict)
 
-    result = process_action(game_id, bot["botId"], bot["botName"], action_dict,
-                            duration_ms=duration_ms)
+    result = process_action(game_id, bot["botId"], action_dict, duration_ms=duration_ms)
 
     # Convert response events
     coord_fmt = bot.get("coordinateFormat", "coordinates")

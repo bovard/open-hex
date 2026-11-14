@@ -1281,6 +1281,8 @@ function renderGuide() {
   -H "Content-Type: application/json" \\
   -d '{"name": "my_bot_v2", "description": "Second version"}'</pre>
     <p>The same limits as registration apply, and a name another bot already has in your mode returns a <code>409 Conflict</code>.
+       A bot can change its name once every 24 hours; a second rename sooner returns <code>429 Too Many Requests</code>
+       with a <code>Retry-After</code> header. The description can be changed at any time.
        The response is the bot, as from <code>GET /api/bots/me</code>.</p>
 
     <h2 id="game-spec">2. Game Specification</h2>

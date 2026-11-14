@@ -28,7 +28,7 @@ curl -X POST https://open-hex.web.app/api/bots \
   -d '{"name": "my_bot", "mode": "1v1"}'
 ```
 
-To rename the bot or change its description later, keeping its rating and record, send a `PATCH` to `/api/bots/me` with the key (`-H "Authorization: Bearer <your-api-key>" -d '{"name": "my_bot_v2"}'`).
+To rename the bot or change its description later, keeping its rating and record, send a `PATCH` to `/api/bots/me` with the key (`-X PATCH -H "Authorization: Bearer <your-api-key>" -d '{"name": "my_bot_v2"}'`). A bot can be renamed once every 24 hours.
 
 The daemon expects the default `"coordinateFormat": "coordinates"`, so leave that field out or set it to `"coordinates"`.
 
