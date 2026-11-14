@@ -23,13 +23,13 @@ def compute_1v1_updates(
     return update_elo(winner_elo, e_w, 1.0, k), update_elo(loser_elo, e_l, 0.0, k)
 
 
-def compute_4p_updates(
+def compute_multiplayer_updates(
     ratings: list[float], finishing_order: list[int], k: float = config.ELO_K_FACTOR
 ) -> list[float]:
-    """Pairwise ELO for 4-player game.
+    """Pairwise ELO for a game of three or more players.
 
-    ratings: list of 4 ELO values in seat order.
-    finishing_order: list of 4 seat indices, best first (index 0 = winner).
+    ratings: one ELO value per seat, in seat order.
+    finishing_order: the seat indices, best first (index 0 = winner).
     Returns new ratings in seat order.
     """
     n = len(ratings)

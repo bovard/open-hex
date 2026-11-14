@@ -6,6 +6,7 @@ import random
 
 from firebase_admin import firestore
 
+import config as cfg
 from services.game_manager import create_game
 
 
@@ -16,15 +17,15 @@ def _get_db():
 def run_matchmaking() -> list[str]:
     """Run one matchmaking pass. Returns list of created game IDs."""
     game_ids = []
-    game_ids.extend(_match_mode("1v1", 2))
-    game_ids.extend(_match_mode("4p", 4))
+    for mode, seats in cfg.MODES.items():
+        game_ids.extend(_match_mode(mode, seats))
     return game_ids
 
 
 def _match_mode(mode: str, players_needed: int) -> list[str]:
     """Match players for a given mode. Returns created game IDs."""
     db = _get_db()
-    elo_key = "elo1v1" if mode == "1v1" else "elo4p"
+    elo_key = f"elo{mode}"
 
     # Get queued bots for this mode, sorted by join time
     queue_docs = list(

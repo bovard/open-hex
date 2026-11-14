@@ -20,9 +20,15 @@ const db = firebase.firestore();
 const $app = document.getElementById("app");
 const $nav = document.getElementById("nav");
 
+// The ladder's modes (firebase/functions/config.py MODES). A bot's rating and
+// record in mode m are its elo{m}, games{m} and wins{m} fields
+const MODES = ["1v1", "3p", "4p"];
+const MODE_LABELS = { "1v1": "1v1", "3p": "3-Player", "4p": "4-Player" };
+
 const NAV_LINKS = [
   { hash: "#/", label: "Home", key: "home" },
   { hash: "#/leaderboard/1v1", label: "1v1 Leaderboard", key: "1v1" },
+  { hash: "#/leaderboard/3p", label: "3p Leaderboard", key: "3p" },
   { hash: "#/leaderboard/4p", label: "4p Leaderboard", key: "4p" },
   { hash: "#/games", label: "Games", key: "games" },
   { hash: "#/guide", label: "Guide", key: "guide" },
@@ -694,15 +700,15 @@ async function renderHome() {
 
   // Counts come from the server: this SDK has no count queries, and downloading
   // every completed game just to count them gets slower as the ladder grows
-  const [stats, top1v1, top4p, recentGames] = await Promise.all([
+  const [stats, recentGames, ...tops] = await Promise.all([
     fetch("/api/stats").then((r) => (r.ok ? r.json() : {})).catch(() => ({})),
-    db.collection("bots").where("mode", "==", "1v1").orderBy("elo1v1", "desc").limit(100).get(),
-    db.collection("bots").where("mode", "==", "4p").orderBy("elo4p", "desc").limit(100).get(),
     db.collection("games")
       .where("status", "in", ["completed", "aborted"])
       .orderBy("completedAt", "desc")
       .limit(5)
       .get(),
+    ...MODES.map((m) =>
+      db.collection("bots").where("mode", "==", m).orderBy(`elo${m}`, "desc").limit(100).get()),
   ]);
 
   function miniLb(snap, eloKey, gamesKey, winsKey) {
@@ -746,17 +752,13 @@ async function renderHome() {
       <div class="stat"><div class="stat-value">${fmtCount(stats.completed_games)}</div><div class="stat-label">Completed</div></div>
       <div class="stat"><div class="stat-value">${fmtCount(stats.queue)}</div><div class="stat-label">In Queue</div></div>
     </div>
-    <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-bottom:1.5rem">
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(16rem, 1fr)); gap:1rem; margin-bottom:1.5rem">
+      ${MODES.map((m, i) => `
       <div class="card">
-        <h2>1v1 Leaderboard</h2>
-        ${miniLb(top1v1, "elo1v1", "games1v1", "wins1v1")}
-        <div style="margin-top:0.5rem; text-align:right"><a href="#/leaderboard/1v1">View all &rarr;</a></div>
-      </div>
-      <div class="card">
-        <h2>4p Leaderboard</h2>
-        ${miniLb(top4p, "elo4p", "games4p", "wins4p")}
-        <div style="margin-top:0.5rem; text-align:right"><a href="#/leaderboard/4p">View all &rarr;</a></div>
-      </div>
+        <h2>${m} Leaderboard</h2>
+        ${miniLb(tops[i], `elo${m}`, `games${m}`, `wins${m}`)}
+        <div style="margin-top:0.5rem; text-align:right"><a href="#/leaderboard/${m}">View all &rarr;</a></div>
+      </div>`).join("")}
     </div>
     <div class="card">
       <h2>Recent Games</h2>
@@ -771,15 +773,15 @@ async function renderHome() {
 // ---------------------------------------------------------------------------
 
 async function renderLeaderboard(mode, showAll) {
-  if (mode !== "1v1" && mode !== "4p") {
+  if (!MODES.includes(mode)) {
     $app.innerHTML = '<p class="empty">Invalid mode</p>';
     return;
   }
   $app.innerHTML = '<div class="loading">Loading...</div>';
 
-  const eloKey = mode === "1v1" ? "elo1v1" : "elo4p";
-  const gamesKey = mode === "1v1" ? "games1v1" : "games4p";
-  const winsKey = mode === "1v1" ? "wins1v1" : "wins4p";
+  const eloKey = `elo${mode}`;
+  const gamesKey = `games${mode}`;
+  const winsKey = `wins${mode}`;
 
   const [docs, activeSnap] = await Promise.all([
     db.collection("bots")
@@ -853,8 +855,7 @@ async function renderLeaderboard(mode, showAll) {
 
   $app.innerHTML = `
     <div class="tabs">
-      <a href="#/leaderboard/1v1${showAll ? "/all" : ""}" class="${mode === "1v1" ? "active" : ""}">1v1</a>
-      <a href="#/leaderboard/4p${showAll ? "/all" : ""}" class="${mode === "4p" ? "active" : ""}">4-Player</a>
+      ${MODES.map((m) => `<a href="#/leaderboard/${m}${showAll ? "/all" : ""}" class="${mode === m ? "active" : ""}">${MODE_LABELS[m]}</a>`).join("\n      ")}
     </div>
     ${activeHtml}
     <div class="card">
@@ -880,9 +881,9 @@ async function renderBotDetail(botId) {
   }
   const bot = botDoc.data();
   const mode = bot.mode || "1v1";
-  const eloKey = mode === "1v1" ? "elo1v1" : "elo4p";
-  const gamesKey = mode === "1v1" ? "games1v1" : "games4p";
-  const winsKey = mode === "1v1" ? "wins1v1" : "wins4p";
+  const eloKey = `elo${mode}`;
+  const gamesKey = `games${mode}`;
+  const winsKey = `wins${mode}`;
   const totalGames = bot[gamesKey] || 0;
   const totalWins = bot[winsKey] || 0;
   const wr = totalGames > 0 ? `${Math.round((totalWins / totalGames) * 100)}%` : "—";
@@ -1235,7 +1236,7 @@ function renderGuide() {
     <h2 id="register">1. Register Your Bot</h2>
     <p>Create a bot by sending a <code>POST</code> to <code>/api/bots</code>.
        Each registration is scoped to a game mode &mdash; the same bot name can register
-       separately for <code>1v1</code> and <code>4p</code> with different API keys.</p>
+       separately for <code>1v1</code>, <code>3p</code> and <code>4p</code> with different API keys.</p>
     <pre>curl -X POST /api/bots \\
   -H "Content-Type: application/json" \\
   -d '{"name": "my_bot", "mode": "1v1", "coordinateFormat": "coordinates", "description": "My first OpenHex bot"}'</pre>
@@ -1258,10 +1259,9 @@ function renderGuide() {
     "id": "a1b2c3d4e5f60718",
     "name": "my_bot",
     "mode": "1v1",
-    "elo_1v1": 1500.0,
-    "elo_4p": 1500.0,
-    "games_1v1": 0, "wins_1v1": 0,
-    "games_4p": 0, "wins_4p": 0
+    "elo_1v1": 1500.0, "games_1v1": 0, "wins_1v1": 0,
+    "elo_3p": 1500.0, "games_3p": 0, "wins_3p": 0,
+    "elo_4p": 1500.0, "games_4p": 0, "wins_4p": 0
   },
   "api_key": "your-secret-api-key"
 }</pre>
@@ -1288,12 +1288,12 @@ function renderGuide() {
     <h2 id="game-spec">2. Game Specification</h2>
     <h3>Game Modes</h3>
     <table>
-      <tr><th></th><th>1v1</th><th>4-Player</th></tr>
-      <tr><td>Victory Points</td><td><strong>15</strong></td><td><strong>10</strong></td></tr>
-      <tr><td>Discard Limit</td><td>9</td><td>7</td></tr>
-      <tr><td>Robber Mode</td><td>Friendly</td><td>Normal</td></tr>
-      <tr><td>Dice Mode</td><td>Balanced</td><td>Random</td></tr>
-      <tr><td>Players</td><td>2 (Red, Blue)</td><td>4 (Red, Blue, White, Orange)</td></tr>
+      <tr><th></th><th>1v1</th><th>3-Player</th><th>4-Player</th></tr>
+      <tr><td>Victory Points</td><td><strong>15</strong></td><td><strong>10</strong></td><td><strong>10</strong></td></tr>
+      <tr><td>Discard Limit</td><td>9</td><td>7</td><td>7</td></tr>
+      <tr><td>Robber Mode</td><td>Friendly</td><td>Normal</td><td>Normal</td></tr>
+      <tr><td>Dice Mode</td><td>Balanced</td><td>Random</td><td>Random</td></tr>
+      <tr><td>Players</td><td>2 (Red, Blue)</td><td>3 (three of Red, Blue, White, Orange, drawn at random)</td><td>4 (Red, Blue, White, Orange)</td></tr>
     </table>
     <div class="note">
       <strong>Friendly robber</strong> means you cannot place the robber on a hex adjacent to a
@@ -1308,8 +1308,8 @@ function renderGuide() {
     <p>Five resource types: <code>wood</code>, <code>brick</code>, <code>sheep</code>,
        <code>wheat</code>, <code>ore</code>. The resource bank starts with 19 of each.</p>
     <h3>Trading</h3>
-    <p>Bots trade resources with each other as on colonist.io, in both modes; in 4-player games three seats can answer
-       each offer. Trading is only ever with the player whose turn it is. Bank and port trades are separate
+    <p>Bots trade resources with each other as on colonist.io, in every mode; in 3- and 4-player games every other seat
+       can answer each offer. Trading is only ever with the player whose turn it is. Bank and port trades are separate
        (<code>tradeWithBank</code>).</p>
     <ol>
       <li>After rolling, with nothing pending, the current player makes offers with <code>proposeTrade</code>.

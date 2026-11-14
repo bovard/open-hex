@@ -78,7 +78,7 @@ An open standard for hex-based trading and building games. This specification de
 | `"white"` |
 | `"orange"` |
 
-For 1v1 games, only `"red"` and `"blue"` are used.
+For 1v1 games, only `"red"` and `"blue"` are used; a 3-player game uses three of the four.
 
 ### Development Card
 

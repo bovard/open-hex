@@ -27,7 +27,7 @@ from services.game_manager import (
 )
 from services.hidden_info import filter_state_for_player, filter_event_for_player
 from services.matchmaker import run_matchmaking
-from config import INITIAL_ELO, GCS_REPLAY_BUCKET, RENAME_COOLDOWN_SECONDS
+from config import INITIAL_ELO, GCS_REPLAY_BUCKET, MODES, RENAME_COOLDOWN_SECONDS
 
 firebase_admin.initialize_app()
 
@@ -76,6 +76,7 @@ def require_auth(f):
 # Bot endpoints
 # ---------------------------------------------------------------------------
 
+MODE_RULE = "Mode must be one of " + ", ".join(f"'{m}'" for m in MODES)
 NAME_RULE = "Name must be 3-32 characters"
 DESCRIPTION_RULE = "Description must be 280 characters or fewer"
 
@@ -110,8 +111,8 @@ def register_bot():
 
     if not _name_ok(name):
         return jsonify({"detail": NAME_RULE}), 400
-    if mode not in ("1v1", "4p"):
-        return jsonify({"detail": "Mode must be '1v1' or '4p'"}), 400
+    if mode not in MODES:
+        return jsonify({"detail": MODE_RULE}), 400
     if coord_fmt not in ("coordinates", "indices"):
         return jsonify({"detail": "coordinateFormat must be 'coordinates' or 'indices'"}), 400
     if not _description_ok(description):
@@ -132,12 +133,10 @@ def register_bot():
         "mode": mode,
         "coordinateFormat": coord_fmt,
         "description": description,
-        "elo1v1": INITIAL_ELO,
-        "elo4p": INITIAL_ELO,
-        "games1v1": 0, "wins1v1": 0,
-        "games4p": 0, "wins4p": 0,
         "createdAt": _now_iso(),
     }
+    for m in MODES:
+        bot_doc.update({f"elo{m}": INITIAL_ELO, f"games{m}": 0, f"wins{m}": 0})
     db.collection("bots").document(bot_id).set(bot_doc)
 
     # Store API key in separate collection (document ID = key for O(1) lookup)
@@ -158,13 +157,13 @@ def _bot_response(bot: dict) -> dict:
         "name": bot.get("name", ""),
         "mode": bot.get("mode", "1v1"),
         "description": bot.get("description", ""),
-        "elo_1v1": bot.get("elo1v1", INITIAL_ELO),
-        "elo_4p": bot.get("elo4p", INITIAL_ELO),
-        "games_1v1": bot.get("games1v1", 0),
-        "wins_1v1": bot.get("wins1v1", 0),
-        "games_4p": bot.get("games4p", 0),
-        "wins_4p": bot.get("wins4p", 0),
     }
+    for m in MODES:
+        resp.update({
+            f"elo_{m}": bot.get(f"elo{m}", INITIAL_ELO),
+            f"games_{m}": bot.get(f"games{m}", 0),
+            f"wins_{m}": bot.get(f"wins{m}", 0),
+        })
     return resp
 
 
@@ -288,8 +287,8 @@ def get_head_to_head(bot_id):
 def join_queue(bot):
     data = request.get_json(force=True)
     mode = data.get("mode", "")
-    if mode not in ("1v1", "4p"):
-        return jsonify({"detail": "Mode must be '1v1' or '4p'"}), 400
+    if mode not in MODES:
+        return jsonify({"detail": MODE_RULE}), 400
 
     if bot["mode"] != mode:
         return jsonify({"detail": f"Bot registered for {bot['mode']}, cannot join {mode} queue"}), 403
@@ -327,8 +326,8 @@ def join_queue(bot):
 def leave_queue(bot):
     data = request.get_json(force=True)
     mode = data.get("mode", "")
-    if mode not in ("1v1", "4p"):
-        return jsonify({"detail": "Mode must be '1v1' or '4p'"}), 400
+    if mode not in MODES:
+        return jsonify({"detail": MODE_RULE}), 400
 
     db = _get_db()
     queue_id = f"{bot['botId']}_{mode}"
@@ -341,9 +340,9 @@ def leave_queue(bot):
 def queue_status(bot):
     db = _get_db()
     bot_id = bot["botId"]
-    q1v1 = db.collection("queue").document(f"{bot_id}_1v1").get().exists
-    q4p = db.collection("queue").document(f"{bot_id}_4p").get().exists
-    return jsonify({"queued": {"1v1": q1v1, "4p": q4p}})
+    return jsonify({"queued": {
+        m: db.collection("queue").document(f"{bot_id}_{m}").get().exists for m in MODES
+    }})
 
 
 # ---------------------------------------------------------------------------
@@ -617,14 +616,12 @@ def get_action_log(game_id):
 
 @app.route("/api/leaderboard/<mode>")
 def get_leaderboard(mode):
-    if mode not in ("1v1", "4p"):
+    if mode not in MODES:
         return jsonify({"detail": "Invalid mode"}), 404
 
     limit_val = int(request.args.get("limit", 50))
     db = _get_db()
-    elo_key = "elo1v1" if mode == "1v1" else "elo4p"
-    games_key = "games1v1" if mode == "1v1" else "games4p"
-    wins_key = "wins1v1" if mode == "1v1" else "wins4p"
+    elo_key, games_key, wins_key = f"elo{mode}", f"games{mode}", f"wins{mode}"
 
     docs = list(
         db.collection("bots")

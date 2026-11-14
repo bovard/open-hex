@@ -21,7 +21,7 @@ from openhex.engine import is_player_trade
 from openhex.json_codec import _action_from_json, _action_to_json, _event_to_json, _config_from_json, _board_from_json, _event_from_json, game_log_to_json, resolve_action_indices
 
 import config as cfg
-from services.elo import compute_1v1_updates, compute_4p_updates
+from services.elo import compute_1v1_updates, compute_multiplayer_updates
 from services.hidden_info import filter_event_for_player, public_event
 
 
@@ -108,8 +108,9 @@ def create_game(mode: str, bot_ids: list[str], seed: int | None = None) -> str:
         )
         colors = [PlayerColor.RED, PlayerColor.BLUE]
     else:
+        # 3p and 4p: the standard game; a 3p game seats three of the four colors
         game_config = GameConfig(
-            victory_points=10, discard_limit=7, num_players=4,
+            victory_points=10, discard_limit=7, num_players=cfg.MODES[mode],
             robber_mode=RobberMode.NORMAL, dice_mode=DiceMode.RANDOM,
         )
         colors = [PlayerColor.RED, PlayerColor.BLUE, PlayerColor.WHITE, PlayerColor.ORANGE]
@@ -410,9 +411,7 @@ def _update_ratings(game_id: str) -> None:
     winner_bot_id = game["winnerBotId"]
     players = game["players"]
 
-    elo_key = "elo1v1" if mode == "1v1" else "elo4p"
-    games_key = "games1v1" if mode == "1v1" else "games4p"
-    wins_key = "wins1v1" if mode == "1v1" else "wins4p"
+    elo_key, games_key, wins_key = f"elo{mode}", f"games{mode}", f"wins{mode}"
     # The leaderboard hides bots whose last game is more than 30 days old
     last_game_at = game.get("completedAt") or _now_iso()
 
@@ -445,7 +444,7 @@ def _update_ratings(game_id: str) -> None:
                 "lastGameAt": last_game_at,
             })
     else:
-        # 4p
+        # 3p and 4p
         state = from_json(json.loads(load_state_json(game_id, game, db)), GameState)
         seat_vp = []
         for p in players:
@@ -460,7 +459,7 @@ def _update_ratings(game_id: str) -> None:
         for p in sorted(players, key=lambda x: x["seat"]):
             ratings.append(bot_docs.get(p["botId"], {}).get(elo_key, cfg.INITIAL_ELO))
 
-        new_ratings = compute_4p_updates(ratings, finishing_order)
+        new_ratings = compute_multiplayer_updates(ratings, finishing_order)
         sorted_players = sorted(players, key=lambda x: x["seat"])
 
         for p, new_r in zip(sorted_players, new_ratings):

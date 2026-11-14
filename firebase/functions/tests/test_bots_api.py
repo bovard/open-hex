@@ -242,6 +242,19 @@ class UpdateBotTest(unittest.TestCase):
         self.assertEqual(r.status_code, 200, r.get_json())
         self.assertEqual(self.db.data["bots"][bot_id]["name"], "third")
 
+    def test_register_for_3p(self):
+        r = self.client.post("/api/bots", json={"name": "trio", "mode": "3p"})
+        self.assertEqual(r.status_code, 200, r.get_json())
+        bot = r.get_json()["bot"]
+        self.assertEqual(bot["mode"], "3p")
+        self.assertEqual((bot["elo_3p"], bot["games_3p"], bot["wins_3p"]), (1500.0, 0, 0))
+        self.assertEqual(self.db.data["bots"][bot["id"]]["elo3p"], 1500.0)
+
+    def test_register_refuses_an_unknown_mode(self):
+        r = self.client.post("/api/bots", json={"name": "quintet", "mode": "5p"})
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.get_json()["detail"], "Mode must be one of '1v1', '3p', '4p'")
+
     def test_bad_requests(self):
         bot_id, key = self.register("mine")
         cases = [

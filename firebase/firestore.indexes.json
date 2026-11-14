@@ -13,6 +13,14 @@
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "mode", "order": "ASCENDING" },
+        { "fieldPath": "elo3p", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "bots",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "mode", "order": "ASCENDING" },
         { "fieldPath": "elo4p", "order": "DESCENDING" }
       ]
     },
