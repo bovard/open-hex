@@ -118,6 +118,11 @@ def create_game(mode: str, bot_ids: list[str], seed: int | None = None) -> str:
     rng = random.Random(seed)
     shuffled_colors = list(colors)
     rng.shuffle(shuffled_colors)
+    # Seat 0 places first, so the seats are drawn too: the matchmaker hands its
+    # groups over sorted by rating, and seating them in that order made the
+    # lower-rated bot go first in almost every game.
+    seated = list(bot_ids)
+    rng.shuffle(seated)
 
     board = generate_standard_board(seed)
     turn_order = shuffled_colors[:len(bot_ids)]
@@ -133,7 +138,7 @@ def create_game(mode: str, bot_ids: list[str], seed: int | None = None) -> str:
             bot_names[bid] = doc.to_dict().get("name", "?")
 
     players = []
-    for seat, (bot_id, color) in enumerate(zip(bot_ids, shuffled_colors)):
+    for seat, (bot_id, color) in enumerate(zip(seated, shuffled_colors)):
         players.append({
             "botId": bot_id,
             "name": bot_names.get(bot_id, "?"),
@@ -151,7 +156,7 @@ def create_game(mode: str, bot_ids: list[str], seed: int | None = None) -> str:
         "winnerName": None,
         "createdAt": now,
         "completedAt": None,
-        "playerBotIds": bot_ids,
+        "playerBotIds": seated,
         "players": players,
         "configJson": json.dumps(to_json(game_config)),
         "boardJson": json.dumps(to_json(board)),
