@@ -105,7 +105,7 @@ Standard deck: **25 cards** total. Use this deck for all player counts (2-4).
 | Value | Description |
 |-------|-------------|
 | `"normal"` | Standard robber rules |
-| `"friendly"` | Cannot place robber on a hex adjacent to a player still at starting VP (2 visible points), unless every other hex is (see [Robber Rules](#robber-rules)) |
+| `"friendly"` | Cannot place robber on a hex adjacent to a player still at starting VP (2 visible points), the mover included; when every hex is, the robber stays put (see [Robber Rules](#robber-rules)) |
 
 ### Dice Mode
 
@@ -547,6 +547,8 @@ Play a knight card. Moves the robber to the specified hex.
 
 After this action, a `stealFromPlayer` action may be required (see [Pending Actions](#pending-action)).
 
+With the friendly robber, when no hex is open to the robber (every hex but its own is next to a player at starting VP), the knight is played without a `location`: it moves no robber and robs nobody, and still counts toward Largest Army. A `location` is then refused, as a missing one is otherwise.
+
 #### playRoadBuilding
 
 Play a Road Building card. The player then must place 2 free roads.
@@ -690,7 +692,7 @@ Move the robber to a new hex (after rolling a 7 or playing a knight).
 {"type": "moveRobber", "player": "red", "location": {"x": 1, "y": -1, "z": 0}}
 ```
 
-The robber MUST be moved to a different hex than its current position. In `"friendly"` robber mode, the robber cannot be placed on a hex adjacent to a player whose visible VP are still the starting 2, unless every other hex is such a hex (see [Robber Rules](#robber-rules)).
+The robber MUST be moved to a different hex than its current position. In `"friendly"` robber mode, the robber cannot be placed on a hex adjacent to a player whose visible VP are still the starting 2, the moving player included. When every hex is such a hex, no robber move is owed (see [Robber Rules](#robber-rules)).
 
 #### stealFromPlayer
 
@@ -1073,8 +1075,8 @@ When a 7 is rolled (or a knight is played):
 3. If any opponents have settlements/cities adjacent to the new hex, the active player steals one random resource from one of them
 
 **Friendly Robber** (`robberMode: "friendly"`):
-- The robber cannot be placed on a hex where it would block a player whose visible VP equals their starting VP (i.e., players who only have their initial 2 settlements)
-- If no valid non-friendly hex exists, the robber may be placed on any hex (fallback)
+- The robber cannot be placed on a hex where it would block a player whose visible VP equals their starting VP (i.e., players who only have their initial 2 settlements), **the moving player included**: while you are at starting VP you can't block your own hexes either
+- If no hex is open to the robber, it stays where it is and nobody is robbed: a 7 owes no `moveRobber` (players over the limit still discard), and a knight is played without a `location` (it still counts toward Largest Army). This is TwoSheep's rule, so bots behave the same on both sites
 
 ### Longest Road
 
