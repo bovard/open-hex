@@ -1485,7 +1485,7 @@ Authorization: Bearer your-api-key</pre>
       <tr><td><code>resourceStolen</code></td><td>player, target, resource (maybe hidden)</td></tr>
       <tr><td><code>nothingToSteal</code></td><td>player, target</td></tr>
       <tr><td><code>resourcesDiscarded</code></td><td>player, resources</td></tr>
-      <tr><td><code>bankTradeExecuted</code></td><td>player, offering, requesting</td></tr>
+      <tr><td><code>bankTradeExecuted</code></td><td>player, offering, requesting (the whole trade: several cards and kinds per side may go in one)</td></tr>
       <tr><td><code>tradeProposed</code></td><td>player, tradeId, offering, requesting, counterTo (counter-offers only)</td></tr>
       <tr><td><code>tradeAccepted</code></td><td>player, tradeId</td></tr>
       <tr><td><code>tradeRejected</code></td><td>player, tradeId</td></tr>

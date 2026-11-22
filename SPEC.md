@@ -966,6 +966,8 @@ An offer closed without executing. `player` is the offer's creator.
 }
 ```
 
+The whole trade in one event, as `tradeWithBank` made it: `offering` and `requesting` may each hold several cards and several kinds (`{"sheep": 2, "wheat": 4}` for `{"ore": 2}` at a sheep port, say).
+
 ### Robber Events
 
 #### robberMoved
