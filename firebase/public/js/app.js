@@ -2151,7 +2151,7 @@ function renderEventsReference() {
 }</pre>
 
     <h3>setupResourcesGranted</h3>
-    <p>Resources granted for the second settlement, sent after its road is placed (setup phase only).</p>
+    <p>Resources granted for the second settlement, sent as soon as it is placed, before its road (setup phase only).</p>
     <pre>{
   "type": "setupResourcesGranted",
   "player": "red",

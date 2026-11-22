@@ -758,7 +758,7 @@ Each event has a `type` and additional fields depending on the event type.
 
 #### setupResourcesGranted
 
-Resources granted after placing the second settlement (one of each from adjacent producing tiles).
+Resources granted for the second settlement, as soon as it is placed (before its road): one of each from the adjacent producing tiles. TwoSheep grants them at the same moment.
 
 ```json
 {"type": "setupResourcesGranted", "player": "red", "resources": {"wood": 1, "wheat": 1, "ore": 1}}
