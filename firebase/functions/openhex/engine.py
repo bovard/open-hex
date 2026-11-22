@@ -563,30 +563,38 @@ class OpenHexEngine:
         return None
 
     def _validate_trade_with_bank(self, s: GameState, a: Action) -> str | None:
+        """A bank trade as TwoSheep takes it: any cards offered, each kind a whole
+        multiple of the player's best rate for it (no leftover cards), for exactly
+        as many cards as that buys, of kinds not offered. One card for 4 (or a
+        port's rate) is the simplest; 8 wood for 2 brick, or 4 wood + 3 sheep at a
+        3:1 port for 2 cards, are one trade too."""
         err = self._require_main_phase(s, a)
         if err:
             return err
         if not a.offering or not a.requesting:
             return "Must offer and request resources"
-        # Offering must be single resource type
-        off_resources = list(a.offering.keys())
-        req_resources = list(a.requesting.keys())
-        if len(off_resources) != 1 or len(req_resources) != 1:
-            return "Bank trade must involve exactly one resource type each"
-        off_r = off_resources[0]
-        req_r = req_resources[0]
-        off_n = a.offering[off_r]
-        req_n = a.requesting[req_r]
-        if req_n != 1:
-            return "Can only request 1 resource from bank"
-        expected_rate = s.board.best_trade_rate(a.player, off_r)
-        if off_n != expected_rate:
-            return f"Must offer {expected_rate} {off_r.value} (your best rate)"
+        # A negative count would take cards instead of giving them, and a
+        # non-integer corrupts the hand; the codec only drops zeros.
+        for n in list(a.offering.values()) + list(a.requesting.values()):
+            if not isinstance(n, int) or isinstance(n, bool) or n <= 0:
+                return "Trade counts must be positive whole numbers"
+        if set(a.offering) & set(a.requesting):
+            return "Cannot trade for the same resource you're offering"
+        receivable = 0
+        for r, n in a.offering.items():
+            rate = s.board.best_trade_rate(a.player, r)
+            if n % rate:
+                return f"Offer {r.value} in multiples of {rate} (your best rate), with no leftover cards"
+            receivable += n // rate
+        requested = sum(a.requesting.values())
+        if requested != receivable:
+            return f"That offer gets exactly {receivable} card{'' if receivable == 1 else 's'} from the bank, not {requested}"
         player = s.get_player(a.player)
         if not has_resources(player.hand, a.offering):
             return "Insufficient resources"
-        if s.bank.get(req_r, 0) < 1:
-            return "Bank has insufficient resources"
+        for r, n in a.requesting.items():
+            if s.bank.get(r, 0) < n:
+                return "Bank has insufficient resources"
         return None
 
     # -- robber / discard ----------------------------------------------------

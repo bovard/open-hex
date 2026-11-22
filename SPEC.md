@@ -669,18 +669,24 @@ Withdraw one of your own standing offers. A seat that made a counter-offer may c
 
 #### tradeWithBank
 
-Trade resources with the bank at the applicable rate.
+Trade resources with the bank at the player's best rates. One card for one rate's worth is the simplest trade; several cards, and several kinds, may go in one trade (as on TwoSheep).
 
 ```json
 {"type": "tradeWithBank", "player": "red", "offering": {"wood": 4}, "requesting": {"wheat": 1}}
+{"type": "tradeWithBank", "player": "red", "offering": {"wood": 8}, "requesting": {"wheat": 1, "ore": 1}}
+{"type": "tradeWithBank", "player": "red", "offering": {"wood": 3, "sheep": 3}, "requesting": {"ore": 2}}
 ```
 
-The offering must contain exactly one resource type. The count must match the player's best available rate:
+Each resource's rate is the player's best for it:
 - **4:1** — default (no port)
 - **3:1** — with a generic port
 - **2:1** — with a matching resource port
 
-The requesting must contain exactly one resource type with count 1.
+The trade must be exact:
+- each offered resource is a whole multiple of its rate (no leftover cards);
+- the requested cards add up to exactly what the offer buys (the sum, over the offered resources, of count / rate);
+- no resource is both offered and requested;
+- the player holds the offered cards, and the bank the requested ones.
 
 ### Robber
 

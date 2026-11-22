@@ -550,3 +550,37 @@ class Contract(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BankTradeTest(TradeCase):
+    """Bank trades as TwoSheep takes them: several cards, and several kinds, in one trade."""
+
+    def rich(self) -> GameState:
+        return main_phase(colors=(RED, BLUE), hands={RED: {WOOD: 9, SHEEP: 4, WHEAT: 1}, BLUE: {}})
+
+    def test_several_cards_at_once(self):
+        s, events = self.act(self.rich(), RED, "tradeWithBank", offering={WOOD: 8}, requesting={BRICK: 2})
+        red = s.get_player(RED).hand
+        self.assertEqual((red.get(WOOD), red.get(BRICK)), (1, 2))
+        self.assertEqual(events[-1]["type"], "bankTradeExecuted")
+
+    def test_several_kinds_at_once(self):
+        s, _ = self.act(self.rich(), RED, "tradeWithBank", offering={WOOD: 4, SHEEP: 4}, requesting={ORE: 1, WHEAT: 1})
+        red = s.get_player(RED).hand
+        self.assertEqual((red.get(WOOD), red.get(SHEEP, 0), red.get(ORE), red.get(WHEAT)), (5, 0, 1, 2))
+
+    def test_each_kind_at_its_own_best_rate(self):
+        s = self.rich()
+        port = next(p for p in s.board.ports if p.resource is None)  # 3:1 for everything
+        s.board.settlements.append(VertexBuilding(vertex=port.vertices[0], player=RED))
+        s, _ = self.act(s, RED, "tradeWithBank", offering={WOOD: 3, SHEEP: 3}, requesting={ORE: 2})
+        self.assertEqual(s.get_player(RED).hand.get(ORE), 2)
+
+    def test_refusals(self):
+        s = self.rich()
+        self.assertIn("multiples of 4", self.refused(s, RED, "tradeWithBank", offering={WOOD: 5}, requesting={BRICK: 1}))
+        self.assertIn("exactly 2 cards", self.refused(s, RED, "tradeWithBank", offering={WOOD: 8}, requesting={BRICK: 1}))
+        self.assertIn("same resource", self.refused(s, RED, "tradeWithBank", offering={WOOD: 4}, requesting={WOOD: 1}))
+        self.assertEqual(self.refused(s, RED, "tradeWithBank", offering={WOOD: 12}, requesting={BRICK: 3}), "Insufficient resources")
+        s.bank[BRICK] = 1
+        self.assertEqual(self.refused(s, RED, "tradeWithBank", offering={WOOD: 8}, requesting={BRICK: 2}), "Bank has insufficient resources")
