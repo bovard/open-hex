@@ -2371,7 +2371,7 @@ function renderEventsReference() {
     <pre>{"type": "tradeCancelled", "player": "red", "tradeId": 1, "reason": "allRejected"}</pre>
 
     <h3>bankTradeExecuted</h3>
-    <p>A player traded with the bank (4:1, 3:1, or 2:1 with port).</p>
+    <p>A player traded with the bank (4:1, 3:1, or 2:1 with port; several cards and kinds may go in one trade, each at its rate).</p>
     <pre>{
   "type": "bankTradeExecuted",
   "player": "red",
