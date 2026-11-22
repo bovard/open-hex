@@ -746,16 +746,10 @@ class OpenHexEngine:
         s.setup_placed_settlement = True
         s.pending_action = PendingAction(type="placeInitialRoad")
 
-    def _exec_place_initial_road(self, s: GameState, a: Action, events: list[Event]):
-        edge = a.edge()
-        s.board.roads.append(Road(edge=edge, player=a.player))
-        events.append(Event(type="setupRoadPlaced", player=a.player,
-                            vertices=(edge.v1, edge.v2)))
-
-        # Grant resources for second settlement
+        # The second settlement's resources, as soon as it is placed (as TwoSheep gives them)
         if s.setup_round == 2:
             granted: ResourceMap = {}
-            for h in s.last_setup_settlement.adjacent_hexes():
+            for h in a.vertex.adjacent_hexes():
                 tile = s.board.tile_at(h)
                 if tile and tile.terrain != Terrain.DESERT and tile.terrain in TERRAIN_RESOURCE:
                     r = TERRAIN_RESOURCE[tile.terrain]
@@ -767,6 +761,12 @@ class OpenHexEngine:
                     s.bank[r] = s.bank.get(r, 0) - n
                 events.append(Event(type="setupResourcesGranted", player=a.player,
                                     resources=granted))
+
+    def _exec_place_initial_road(self, s: GameState, a: Action, events: list[Event]):
+        edge = a.edge()
+        s.board.roads.append(Road(edge=edge, player=a.player))
+        events.append(Event(type="setupRoadPlaced", player=a.player,
+                            vertices=(edge.v1, edge.v2)))
 
         s.setup_placed_settlement = False
         s.last_setup_settlement = None

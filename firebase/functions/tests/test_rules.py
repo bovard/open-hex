@@ -171,3 +171,30 @@ class DefaultActionTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SetupResourcesTest(unittest.TestCase):
+    """The second settlement's resources come as soon as it is placed, before its road (as TwoSheep gives them)."""
+
+    def test_granted_with_the_second_settlement(self):
+        engine = OpenHexEngine()
+        s = GameState.new_game(duel_state().config, generate_standard_board(3), [RED, BLUE])
+        # Red, Blue, Blue, Red: the first round (a settlement and a road each)
+        for _ in range(4):
+            s = engine.execute_action(s, engine.default_action(s, s.current_player)).state
+        self.assertEqual(s.setup_round, 2)
+        player = s.current_player
+        before = sum(s.get_player(player).hand.values())
+        placed = engine.execute_action(s, engine.default_action(s, player))
+        self.assertTrue(placed.success, placed.error)
+        self.assertEqual(placed.state.pending_action.type, "placeInitialRoad")
+        granted = [e for e in placed.events if e.type == "setupResourcesGranted"]
+        self.assertEqual(len(granted), 1)
+        after = sum(placed.state.get_player(player).hand.values())
+        self.assertEqual(after - before, sum(granted[0].resources.values()))
+        self.assertGreater(after, before)
+        # And nothing more with the road
+        road = engine.execute_action(placed.state, engine.default_action(placed.state, player))
+        self.assertTrue(road.success, road.error)
+        self.assertEqual(sum(road.state.get_player(player).hand.values()), after)
+        self.assertFalse(any(e.type == "setupResourcesGranted" for e in road.events))
