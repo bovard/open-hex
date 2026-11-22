@@ -211,13 +211,75 @@ class FriendlyRobberTest(unittest.TestCase):
                                                           location=HexPoint(0, 1, -1)))
         self.assertTrue(result.success, result.error)
 
-    def test_a_shielded_hex_is_allowed_once_every_hex_is_shielded(self):
+    def test_the_mover_is_shielded_too(self):
+        # Red, moving the robber and still at starting VP, may not block its own hex either
+        s = self.small_board(3)
+        s.board.settlements.append(VertexBuilding(HexPoint(0, 1, -1).vertices()[1], RED))
+        result = OpenHexEngine().execute_action(s, Action(type="moveRobber", player=RED,
+                                                          location=HexPoint(0, 1, -1)))
+        self.assertFalse(result.success)
+        self.assertIn("Friendly robber", result.error)
+
+    def every_hex_protected(self) -> GameState:
+        """Two producing hexes around the desert, both next to Blue at starting VP."""
         s = self.small_board(2)
         self.shield(s, HexPoint(1, -1, 0))
         self.shield(s, HexPoint(1, 0, -1))
-        result = OpenHexEngine().execute_action(s, Action(type="moveRobber", player=RED,
-                                                          location=HexPoint(1, -1, 0)))
+        return s
+
+    def test_a_seven_owes_no_robber_move_when_every_hex_is_protected(self):
+        s = self.every_hex_protected()
+        s.pending_action = PendingAction(type="rollDice")
+        engine = OpenHexEngine()
+        engine._roll = lambda state: (3, 4)
+        result = engine.execute_action(s, Action(type="rollDice", player=RED))
         self.assertTrue(result.success, result.error)
+        self.assertIsNone(result.state.pending_action)
+        self.assertEqual(result.state.board.robber, HexPoint(0, 0, 0))
+
+    def test_after_discards_no_robber_move_when_every_hex_is_protected(self):
+        s = self.every_hex_protected()
+        s.dice = DiceResult(3, 4)
+        s.get_player(BLUE).hand = {Resource.WOOD: 10}
+        s.pending_action = PendingAction(type="discardResources", players={BLUE: 5})
+        result = OpenHexEngine().execute_action(s, Action(type="discardResources", player=BLUE,
+                                                          resources={Resource.WOOD: 5}))
+        self.assertTrue(result.success, result.error)
+        self.assertIsNone(result.state.pending_action)
+
+    def test_a_knight_moves_no_robber_when_every_hex_is_protected(self):
+        s = self.every_hex_protected()
+        s.pending_action = PendingAction(type="rollDice")
+        s.get_player(RED).dev_cards[DevCard.KNIGHT] = 1
+        engine = OpenHexEngine()
+        refused = engine.execute_action(s, Action(type="playKnight", player=RED, location=HexPoint(1, -1, 0)))
+        self.assertFalse(refused.success)
+        self.assertIn("without a location", refused.error)
+        played = engine.execute_action(s, Action(type="playKnight", player=RED))
+        self.assertTrue(played.success, played.error)
+        self.assertEqual(played.state.get_player(RED).knights_played, 1)
+        self.assertEqual(played.state.board.robber, HexPoint(0, 0, 0))
+        self.assertEqual(played.state.pending_action.type, "rollDice")
+
+    def test_a_knight_judges_the_hex_with_itself_counted(self):
+        # Red at starting VP, with two knights played: this third brings Largest Army (+2), so Red
+        # is past starting VP once it counts and may block its own hex
+        s = self.small_board(3)
+        s.board.settlements.append(VertexBuilding(HexPoint(0, 1, -1).vertices()[1], RED))
+        s.pending_action = PendingAction(type="rollDice")
+        s.get_player(RED).dev_cards[DevCard.KNIGHT] = 1
+        s.get_player(RED).knights_played = 2
+        result = OpenHexEngine().execute_action(s, Action(type="playKnight", player=RED, location=HexPoint(0, 1, -1)))
+        self.assertTrue(result.success, result.error)
+        self.assertEqual(result.state.largest_army_player, RED)
+
+    def test_a_knight_needs_a_location_when_the_robber_can_move(self):
+        s = self.small_board(3)
+        s.pending_action = PendingAction(type="rollDice")
+        s.get_player(RED).dev_cards[DevCard.KNIGHT] = 1
+        result = OpenHexEngine().execute_action(s, Action(type="playKnight", player=RED))
+        self.assertFalse(result.success)
+        self.assertEqual(result.error, "Missing robber location")
 
     def test_a_seat_past_starting_vp_is_not_shielded(self):
         s = self.small_board(3)

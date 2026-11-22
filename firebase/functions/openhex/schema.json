@@ -61,7 +61,7 @@
     "RobberMode": {
       "type": "string",
       "enum": ["normal", "friendly"],
-      "description": "friendly: robber cannot block players at starting VP count (2 VP)."
+      "description": "friendly: robber cannot block a player at starting VP (2 VP), the mover included; when every hex is protected it stays put (no robber move owed; a knight is played without location)."
     },
 
     "DiceMode": {

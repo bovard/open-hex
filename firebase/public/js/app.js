@@ -1337,7 +1337,9 @@ function renderGuide() {
     </table>
     <div class="note">
       <strong>Friendly robber</strong> means you cannot place the robber on a hex adjacent to a
-      player who has &le; the starting number of victory points (2 settlements = 2 VP).
+      player who has &le; the starting number of victory points (2 settlements = 2 VP), yourself
+      included. When every hex is protected, the robber stays where it is and nobody is robbed
+      (a knight is then played without a location). TwoSheep plays the same rule.
     </div>
     <h3>Board &amp; Coordinates</h3>
     <p>The board uses <strong>cube coordinates</strong> where <code>x + y + z = 0</code> for hex tiles.

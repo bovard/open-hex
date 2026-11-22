@@ -322,9 +322,27 @@ class OpenHexEngine:
         err = self._validate_play_dev_card_common(s, a, DevCard.KNIGHT)
         if err:
             return err
+        # Where the robber may go is judged once this knight counts: it may bring Largest Army,
+        # taking the player past starting VP (friendly robber), as TwoSheep judges it.
+        counted = self._with_knight_counted(s, a.player)
+        # With nowhere the robber may go (friendly robber), the knight moves no robber: played
+        # without a location, it still counts toward Largest Army.
+        if not self._robber_has_legal_hex(counted, a.player):
+            if a.location is not None:
+                return "No hex for the robber (every hex is protected): play the knight without a location"
+            return None
         if a.location is None:
             return "Missing robber location"
-        return self._validate_robber_placement(s, a)
+        return self._validate_robber_placement(counted, a)
+
+    def _with_knight_counted(self, s: GameState, player: PlayerColor) -> GameState:
+        """The game as if `player`'s knight were played (Largest Army settled), robber unmoved."""
+        if s.config.robber_mode != RobberMode.FRIENDLY:
+            return s  # (only the friendly robber looks at points)
+        t = copy.deepcopy(s)
+        t.get_player(player).knights_played += 1
+        self._update_largest_army(t, player, [])
+        return t
 
     def _validate_play_road_building(self, s: GameState, a: Action) -> str | None:
         err = self._require_card_window(s, a)
@@ -593,23 +611,29 @@ class OpenHexEngine:
             return "Not a valid hex"
         if tile.terrain == Terrain.DESERT and s.board.robber == loc:
             return "Robber already on desert"
-        # Friendly robber: hexes with an opponent still at starting VP are
-        # off limits, unless every other hex is too (the spec's fallback).
-        if (s.config.robber_mode == RobberMode.FRIENDLY
-                and self._friendly_robber_shields(s, a.player, loc)
-                and any(not self._friendly_robber_shields(s, a.player, t.location)
-                        for t in s.board.tiles if t.location != s.board.robber)):
+        # Friendly robber: hexes with a player still at starting VP are off limits,
+        # the mover's own included. When every hex is, the robber stays put
+        # (_robber_has_legal_hex): no move is owed.
+        if s.config.robber_mode == RobberMode.FRIENDLY and self._friendly_robber_shields(s, loc):
             return "Friendly robber: cannot block player at starting VP"
         return None
 
-    def _friendly_robber_shields(self, s: GameState, mover: PlayerColor,
-                                 loc: HexPoint) -> bool:
-        """Whether an opponent at starting VP (2 visible points) has a building on `loc`."""
+    def _friendly_robber_shields(self, s: GameState, loc: HexPoint) -> bool:
+        """Whether a player at starting VP (2 visible points) has a building on `loc`, the mover included."""
         for v in loc.vertices():
             b = s.board.building_at(v)
-            if b and b.player != mover and s.compute_public_vp(b.player) <= 2:
+            if b and s.compute_public_vp(b.player) <= 2:
                 return True
         return False
+
+    def _robber_has_legal_hex(self, s: GameState, mover: PlayerColor) -> bool:
+        """Whether the robber may go anywhere: a hex other than its own (with the
+        friendly robber, one with nobody at starting VP on it). When not, a 7 owes
+        no robber move and a knight moves no robber."""
+        return any(
+            self._validate_robber_placement(s, Action(type="moveRobber", player=mover, location=t.location)) is None
+            for t in s.board.tiles
+        )
 
     def _validate_steal_from_player(self, s: GameState, a: Action) -> str | None:
         err = self._require_current_player(s, a)
@@ -867,8 +891,11 @@ class OpenHexEngine:
                 type="discardResources",
                 players=discard_players,
             )
-        else:
+        elif self._robber_has_legal_hex(s, roller):
             s.pending_action = PendingAction(type="moveRobber")
+        else:
+            # Every hex protected (friendly robber): the robber stays, nobody is robbed
+            s.pending_action = None
 
     # -- building ------------------------------------------------------------
 
@@ -931,7 +958,12 @@ class OpenHexEngine:
         player = s.get_player(a.player)
         player.knights_played += 1
 
-        # Move robber
+        # Move robber (none to move when every hex is protected: the knight still counts)
+        if a.location is None:
+            events.append(Event(type="knightPlayed", player=a.player))
+            if s.dice is None:
+                s.pending_action = PendingAction(type="rollDice")
+            return
         s.board.robber = a.location
         events.append(Event(type="knightPlayed", player=a.player, location=a.location))
 
@@ -1113,7 +1145,9 @@ class OpenHexEngine:
         # Remove this player from pending discards
         del s.pending_action.players[a.player]
         if not s.pending_action.players:
-            s.pending_action = PendingAction(type="moveRobber")
+            # The robber next, unless every hex is protected (friendly robber): then it stays
+            mover = s.current_player
+            s.pending_action = PendingAction(type="moveRobber") if mover and self._robber_has_legal_hex(s, mover) else None
 
     def _exec_place_free_road(self, s: GameState, a: Action, events: list[Event]):
         edge = a.edge()
