@@ -169,10 +169,6 @@ class DefaultActionTest(unittest.TestCase):
         self.assertEqual(OpenHexEngine().default_action(s, RED).type, "rollDice")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class SetupResourcesTest(unittest.TestCase):
     """The second settlement's resources come as soon as it is placed, before its road (as TwoSheep gives them)."""
 
@@ -198,3 +194,7 @@ class SetupResourcesTest(unittest.TestCase):
         self.assertTrue(road.success, road.error)
         self.assertEqual(sum(road.state.get_player(player).hand.values()), after)
         self.assertFalse(any(e.type == "setupResourcesGranted" for e in road.events))
+
+
+if __name__ == "__main__":
+    unittest.main()

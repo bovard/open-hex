@@ -548,10 +548,6 @@ class Contract(unittest.TestCase):
         self.assertIn("reason", schema["$defs"]["Event"]["properties"])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class BankTradeTest(TradeCase):
     """Bank trades as TwoSheep takes them: several cards, and several kinds, in one trade."""
 
@@ -584,3 +580,7 @@ class BankTradeTest(TradeCase):
         self.assertEqual(self.refused(s, RED, "tradeWithBank", offering={WOOD: 12}, requesting={BRICK: 3}), "Insufficient resources")
         s.bank[BRICK] = 1
         self.assertEqual(self.refused(s, RED, "tradeWithBank", offering={WOOD: 8}, requesting={BRICK: 2}), "Bank has insufficient resources")
+
+
+if __name__ == "__main__":
+    unittest.main()

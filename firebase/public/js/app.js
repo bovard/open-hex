@@ -393,6 +393,8 @@ function deriveStateAtPosition(replay, pos) {
           players[p].knightsPlayed++;
           players[p].devCards["knight"] = Math.max(0, (players[p].devCards["knight"] || 0) - 1);
         }
+        // A knight moves the robber itself (no robberMoved follows); none when every hex is protected
+        if (ev.location) robber = { ...ev.location };
         break;
       case "monopolyPlayed":
         if (players[p]) {
@@ -1476,7 +1478,7 @@ Authorization: Bearer your-api-key</pre>
       <tr><td><code>cityBuilt</code></td><td>player, vertex</td></tr>
       <tr><td><code>roadBuilt</code></td><td>player, edge</td></tr>
       <tr><td><code>devCardBought</code></td><td>player, card (hidden for opponents)</td></tr>
-      <tr><td><code>knightPlayed</code></td><td>player, hex</td></tr>
+      <tr><td><code>knightPlayed</code></td><td>player, hex (absent when the robber stays put)</td></tr>
       <tr><td><code>roadBuildingPlayed</code></td><td>player</td></tr>
       <tr><td><code>freeRoadPlaced</code></td><td>player, edge</td></tr>
       <tr><td><code>yearOfPlentyPlayed</code></td><td>player, resources (list)</td></tr>
@@ -2228,7 +2230,8 @@ function renderEventsReference() {
 
     <h3>knightPlayed</h3>
     <p>A knight card was played; it moves the robber to <code>hex</code>. If an opponent can be
-       robbed there, a <code>stealFromPlayer</code> action is then pending.</p>
+       robbed there, a <code>stealFromPlayer</code> action is then pending. With the friendly robber,
+       when every hex is protected, the knight moves no robber and the event has no <code>hex</code>.</p>
     <pre>{
   "type": "knightPlayed",
   "player": "red",
@@ -2428,7 +2431,7 @@ function renderEventsReference() {
       <tr><td><code>roadBuilt</code></td><td>player, edge</td><td>Main</td></tr>
       <tr><td><code>cityBuilt</code></td><td>player, vertex</td><td>Main</td></tr>
       <tr><td><code>devCardBought</code></td><td>player, card (hidden for opponents)</td><td>Main</td></tr>
-      <tr><td><code>knightPlayed</code></td><td>player, hex</td><td>Main / before the roll</td></tr>
+      <tr><td><code>knightPlayed</code></td><td>player, hex (absent when the robber stays put)</td><td>Main / before the roll</td></tr>
       <tr><td><code>monopolyPlayed</code></td><td>player, resource, collected</td><td>Main</td></tr>
       <tr><td><code>yearOfPlentyPlayed</code></td><td>player, resources (list)</td><td>Main</td></tr>
       <tr><td><code>roadBuildingPlayed</code></td><td>player</td><td>Main</td></tr>

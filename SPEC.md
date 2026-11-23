@@ -831,6 +831,8 @@ The `card` field is **private** — see [Hidden Information](#11-hidden-informat
 {"type": "knightPlayed", "player": "red", "location": {"x": 1, "y": -1, "z": 0}}
 ```
 
+`location` is the robber's new hex. It is absent when the knight moves no robber (friendly robber, every hex protected; see [playKnight](#playknight)).
+
 #### roadBuildingPlayed
 
 ```json
