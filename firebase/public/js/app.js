@@ -1363,10 +1363,10 @@ function renderGuide() {
           offer's id, addressed to the current player only. Answers can change while the offer stands
           (<code>withdrawTradeAnswer</code> takes one back).</li>
       <li>The current player executes an offer with one seat that accepted it, or takes a counter-offer, with
-          <code>confirmTrade</code>. Both hands are checked again then.</li>
+          <code>confirmTrade</code>. Both hands are checked again then, and every other offer closes.</li>
       <li>An offer closes when it executes, when its creator cancels it, when every seat it was put to has
-          rejected it, or when the current player does anything else (builds, buys or plays a card, trades with
-          the bank, ends the turn).</li>
+          rejected it, or when the current player does anything else (executes another offer, builds, buys or
+          plays a card, trades with the bank, ends the turn).</li>
     </ol>
     <p>Answering is optional: offers never set <code>pendingAction</code> and never hold up the game. The state's
        <code>trades</code> array lists the standing offers and every seat's answer; poll it on other players'
@@ -2369,8 +2369,8 @@ function renderEventsReference() {
     <h3>tradeCancelled</h3>
     <p>An offer closed without executing. <code>player</code> is the offer's creator. <code>reason</code> is
        <code>"cancelled"</code> (its creator cancelled it), <code>"allRejected"</code> (every seat it was put to
-       rejected it) or <code>"currentPlayerMoved"</code> (the current player built, bought or played a card, traded
-       with the bank or ended the turn; these come before that action's own events).</p>
+       rejected it) or <code>"currentPlayerMoved"</code> (the current player executed another offer, built, bought
+       or played a card, traded with the bank or ended the turn; these come before that action's own events).</p>
     <pre>{"type": "tradeCancelled", "player": "red", "tradeId": 1, "reason": "allRejected"}</pre>
 
     <h3>bankTradeExecuted</h3>

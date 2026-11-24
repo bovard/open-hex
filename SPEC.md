@@ -584,9 +584,10 @@ Players trade with each other only during the current player's turn, and only wi
 - it is executed (`confirmTrade`, event `tradeExecuted`);
 - its creator cancels it (`cancelTrade`);
 - every seat it was put to has rejected it;
+- the current player executes another offer (`confirmTrade`). Every other standing offer, counter-offers included, closes before the trade takes effect, so none stands after a trade; to trade again the current player makes new offers;
 - the current player takes any action other than the trade actions in this section: a build, buying or playing a development card, a bank trade, `endTurn`. Every standing offer, counter-offers included, closes before that action takes effect.
 
-Every close other than execution produces a `tradeCancelled` event with a `reason`. Executing one offer leaves the others standing.
+Every close other than execution produces a `tradeCancelled` event with a `reason`.
 
 **Answering is optional.** Standing offers never set `pendingAction`: the game never waits on an answer, and the current player may move on at any time. An answer to an offer that has just closed fails with `Trade not found`.
 
@@ -658,6 +659,8 @@ For a counter-offer, `partner` may be omitted; if given it must be the counter-o
 ```
 
 Both hands are checked again when the trade executes: the offer's creator must still hold `offering` and the other side `requesting`.
+
+Every other standing offer, counter-offers included, closes first (`tradeCancelled` with reason `currentPlayerMoved`, before `tradeExecuted`).
 
 #### cancelTrade
 
@@ -955,7 +958,7 @@ An offer closed without executing. `player` is the offer's creator.
 |----------|---------|
 | `cancelled` | Its creator cancelled it (`cancelTrade`) |
 | `allRejected` | Every seat it was put to rejected it |
-| `currentPlayerMoved` | The current player took another action (a build, a development card, a bank trade, `endTurn`). These events come before that action's own events |
+| `currentPlayerMoved` | The current player executed another offer (`confirmTrade`) or took another action (a build, a development card, a bank trade, `endTurn`). These events come before that action's own events |
 
 #### bankTradeExecuted
 
@@ -1064,7 +1067,7 @@ Each turn follows this sequence:
    - Build roads, settlements, cities
    - Buy development cards
    - Play one development card (except VP cards and cards bought this turn)
-   - Trade with other players: offer, confirm, or cancel trades, while the other seats answer, counter, or withdraw their answers (section 7, Trading). Any other action closes every standing offer
+   - Trade with other players: offer, confirm, or cancel trades, while the other seats answer, counter, or withdraw their answers (section 7, Trading). Confirming a trade closes every other standing offer, and any other action closes them all
    - Trade with the bank
 5. **End turn**: Player submits `endTurn`
 
