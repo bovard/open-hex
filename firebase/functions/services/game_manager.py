@@ -119,8 +119,9 @@ def create_game(mode: str, bot_ids: list[str], seed: int | None = None) -> str:
     shuffled_colors = list(colors)
     rng.shuffle(shuffled_colors)
     # Seat 0 places first, so the seats are drawn too: the matchmaker hands its
-    # groups over sorted by rating, and seating them in that order made the
-    # lower-rated bot go first in almost every game.
+    # groups over in its own order (the longest-waiting bot first), and seating
+    # them in that order, when it was by rating, made the lower-rated bot go
+    # first in almost every game.
     seated = list(bot_ids)
     rng.shuffle(seated)
 

@@ -1,6 +1,7 @@
 """Who places first: `game_manager.create_game` seats the matched bots.
 
-The matchmaker hands each group over sorted by rating, so seating the bots in
+The matchmaker hands each group over in its own order (then sorted by rating,
+now the longest-waiting bot first), so seating the bots in
 the order they arrive gave seat 0 (the first to place, and the first to move)
 to the lower-rated bot almost every time. The seats are now drawn from the
 game's seed. The Firebase and Google Cloud packages are stood in for, so no
