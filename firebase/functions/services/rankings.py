@@ -45,6 +45,9 @@ RANK_MIN_GAMES = 20
 RATING_BASE = 1500.0
 RATING_SCALE = 400.0
 _LOG10_SCALE = RATING_SCALE / math.log(10)  # rating points per unit of log strength
+# The standard error of a rating with only the prior behind it (PRIOR_GAMES even
+# games against the anchor): about what a bot with no games is given
+PRIOR_SE = _LOG10_SCALE / math.sqrt(PRIOR_GAMES / 4)
 MAX_ITERATIONS = 100
 TOLERANCE = 1e-6  # the largest gap between a bot's expected and actual wins, in games
 
