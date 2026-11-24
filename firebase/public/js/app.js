@@ -83,12 +83,9 @@ function route() {
   }
 }
 
-// Replay viewer state (must be declared before route() runs)
+// Replay viewer state
 let _replayData = null;
 let _replayPos = 0;
-
-window.addEventListener("hashchange", route);
-route();
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -2598,3 +2595,9 @@ function renderRatings() {
   </div>
   `;
 }
+
+// Start the router last, once every constant above is defined: a page opened by
+// a direct link renders at once, and one that reads a constant declared below
+// the first route() call (ACTIVE_DAYS, TERRAIN_COLORS) threw and stayed on "Loading..."
+window.addEventListener("hashchange", route);
+route();
