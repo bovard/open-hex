@@ -8,6 +8,7 @@ from firebase_admin import firestore
 
 import config as cfg
 from services.game_manager import create_game
+from services.rankings import RANK_MIN_GAMES
 
 
 def _get_db():
@@ -25,16 +26,18 @@ def run_matchmaking() -> list[str]:
 def _match_mode(mode: str, players_needed: int) -> list[str]:
     """Match players for a given mode. Returns created game IDs.
 
-    A 3p or 4p table seats the bots that have waited longest, in the order
-    they joined, so the bots playing a mode share its games evenly. A 1v1
-    game pairs the bot that has waited longest with the waiting bot closest
-    to it in rating (with some randomness), not the bot it just played if
-    another is waiting. Grouping the queue sorted by rating instead left the
-    top-rated bots out whenever it did not divide into full tables, round
-    after round: with six 4p bots playing, the two highest rated sat out
-    most games. (Seating each 3p/4p table around the longest-waiting bot by
-    rating still left the bots at either end of the ratings half the games
-    of those in the middle.)"""
+    Bots are seated in order: first the provisional ones (fewer than
+    RANK_MIN_GAMES rated games), fewest rated games first, so a new bot
+    plays every game it queues for until its rating settles; then the rest,
+    longest waiting first, so they share the games evenly. A 3p or 4p table
+    seats the first bots in that order. A 1v1 game pairs the first with the
+    waiting bot closest to it in rating (with some randomness), not the bot
+    it just played if another is waiting. Grouping the queue sorted by
+    rating instead left the top-rated bots out whenever it did not divide
+    into full tables, round after round: with six 4p bots playing, the two
+    highest rated sat out most games. (Seating each 3p/4p table around the
+    longest-waiting bot by rating still left the bots at either end of the
+    ratings half the games of those in the middle.)"""
     db = _get_db()
     elo_key = f"elo{mode}"
 
@@ -70,16 +73,22 @@ def _match_mode(mode: str, players_needed: int) -> list[str]:
             waiting.append(bid)
             queue_id[bid] = qdoc.id
 
-    # 1v1: ratings, with jitter so the same bots are not always paired, and
-    # each bot's last opponent
+    # Each bot's rated games (as of the last ratings refit) and, for 1v1,
+    # its rating, with jitter so the same bots are not always paired, and its
+    # last opponent
+    rated = {}
     rating = {}
     last_opp = {}
-    if mode == "1v1":
-        for bid in waiting:
-            bot_doc = db.collection("bots").document(bid).get()
-            bdata = bot_doc.to_dict() if bot_doc.exists else {}
-            rating[bid] = (bdata.get(elo_key) or 1500.0) + random.gauss(0, 50)
-            last_opp[bid] = bdata.get("lastOpponentId")
+    for bid in waiting:
+        bot_doc = db.collection("bots").document(bid).get()
+        bdata = bot_doc.to_dict() if bot_doc.exists else {}
+        rated[bid] = bdata.get(f"ratedGames{mode}") or 0
+        rating[bid] = (bdata.get(elo_key) or 1500.0) + random.gauss(0, 50)
+        last_opp[bid] = bdata.get("lastOpponentId")
+
+    # Provisional bots first, fewest rated games first; then the rest. The
+    # sort is stable, so bots level on that keep their queue order.
+    waiting.sort(key=lambda b: min(rated[b], RANK_MIN_GAMES))
 
     game_ids = []
     while len(waiting) >= players_needed:

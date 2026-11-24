@@ -1,12 +1,14 @@
-"""The matchmaker seats the bots that have waited longest.
+"""The matchmaker seats provisional bots first, then the bots that waited longest.
 
 It used to sort the queue by rating and seat full tables from the bottom up,
 so whoever did not fit sat out: the highest rated. With six 4p bots playing,
 the two highest rated (2s-NN-Small-Greedy-B and 2s-NN-Small-Greedy) sat out
 most rounds; B had 9 games when its twin, registered the same minute, had 15.
-A 3p or 4p table now seats the longest-waiting bots in the order they joined;
-a 1v1 game pairs the longest-waiting bot with the waiting bot nearest its
-rating.
+Bots are now seated in order: provisional bots (fewer than 20 rated games)
+first, fewest rated games first, so a new bot plays every game it queues for
+until its rating settles; then the rest, longest waiting first. A 3p or 4p
+table seats the first bots in that order; a 1v1 game pairs the first with the
+waiting bot nearest its rating.
 The Firebase and Google Cloud packages are stood in for, so no project or
 credentials are needed. Run from the repository root:
     python3 -m unittest discover -s firebase/functions/tests -t firebase/functions
@@ -62,10 +64,15 @@ class MatchmakerCase(unittest.TestCase):
         self.tables.append(list(bot_ids))
         return f"game-{len(self.tables)}"
 
-    def bots(self, mode, ratings, **extra):
+    def bots(self, mode, ratings, rated=None, **extra):
+        """Bots with these ratings; established (40 rated games) unless `rated`
+        gives a bot's rated games (None: no ratings refit has counted any)."""
         for bot_id, rating in ratings.items():
-            self.db.collection("bots").document(bot_id).set(
-                {"name": bot_id, f"elo{mode}": rating, **extra.get(bot_id, {})})
+            doc = {"name": bot_id, f"elo{mode}": rating, **extra.get(bot_id, {})}
+            games = (rated or {}).get(bot_id, 40)
+            if games is not None:
+                doc[f"ratedGames{mode}"] = games
+            self.db.collection("bots").document(bot_id).set(doc)
 
     def join(self, mode, *bot_ids):
         """Queue the bots, in this order (the fake returns documents as inserted)."""
@@ -142,6 +149,57 @@ class LongestWaitingFirst(MatchmakerCase):
         self.assertEqual(self.match("3p"), [])
         self.assertEqual(self.queued(), ["a", "b"])
 
+
+
+class ProvisionalFirst(MatchmakerCase):
+    def test_provisional_bots_first_fewest_rated_games_first(self):
+        self.bots("4p", {b: 1500 for b in "abcdef"},
+                  rated={"a": 25, "b": 30, "c": 5, "d": 22, "e": None, "f": 19})
+        self.join("4p", "a", "b", "c", "d", "e", "f")
+        self.match("4p")
+        # e (no rated games yet), c (5) and f (19), then a, the longest waiting
+        self.assertEqual(self.tables, [["e", "c", "f", "a"]])
+        self.assertEqual(self.queued(), ["b", "d"])
+
+    def test_a_new_bot_plays_every_game_until_it_is_rated(self):
+        # Six established bots in rotation; a new one joins. It plays every
+        # round until it has 20 rated games (the established bots share the
+        # other three seats, none waiting two rounds running), then takes its
+        # turn with the rest.
+        bots = dict(LIVE_4P, new=1500)
+        self.bots("4p", bots, rated={"new": None})
+        self.join("4p", *LIVE_4P, "new")
+        played = dict.fromkeys(bots, 0)
+        waited = dict.fromkeys(LIVE_4P, 0)
+        first_rounds = []
+        for rnd in range(160):
+            self.tables.clear()
+            self.match("4p")
+            (table,) = self.tables
+            for bot in table:
+                played[bot] += 1
+                doc = self.db.data["bots"][bot]   # as the ratings refit counts it
+                doc["ratedGames4p"] = doc.get("ratedGames4p", 0) + 1
+            if rnd < 20:
+                first_rounds.append("new" in table)
+                for bot in LIVE_4P:
+                    waited[bot] = 0 if bot in table else waited[bot] + 1
+                    self.assertLessEqual(waited[bot], 1, (rnd, bot))
+            if rnd == 19:
+                played = dict.fromkeys(bots, 0)
+            self.join("4p", *table)
+        self.assertEqual(first_rounds, [True] * 20)
+        # Rated from then on: 4 seats of 7, about 57% of the rounds each
+        for bot, n in played.items():
+            self.assertGreater(n, 140 * 0.5, (bot, played))
+            self.assertLess(n, 140 * 0.65, (bot, played))
+
+    def test_1v1_pairs_a_new_bot_first(self):
+        self.bots("1v1", {"old": 1500, "mid": 1600, "new": 1500}, rated={"new": 0})
+        self.join("1v1", "old", "mid", "new")
+        self.match("1v1", jitter=False)
+        self.assertEqual(self.tables, [["new", "old"]])
+        self.assertEqual(self.queued(), ["mid"])
 
 
 class StaleEntries(MatchmakerCase):
