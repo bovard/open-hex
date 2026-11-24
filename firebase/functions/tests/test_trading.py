@@ -135,14 +135,16 @@ class CounterOffers(TradeCase):
         self.assertEqual((counter.proposer, counter.counter_to), (BLUE, tid))
 
         # The mover takes it with confirmTrade; the partner is the counter's creator.
+        # The original offer closes first, as every other offer does on a confirm.
         s, events = self.act(s, RED, "confirmTrade", trade_id=2)
-        self.assertEqual(events, [{"type": "tradeExecuted", "player": "blue", "partner": "red",
+        self.assertEqual(events, [{"type": "tradeCancelled", "player": "red", "tradeId": tid,
+                                   "reason": "currentPlayerMoved"},
+                                  {"type": "tradeExecuted", "player": "blue", "partner": "red",
                                    "tradeId": 2, "offering": {"brick": 1},
                                    "requesting": {"wood": 2}}])
         self.assertEqual((s.get_player(BLUE).hand[BRICK], s.get_player(BLUE).hand[WOOD]), (2, 5))
         self.assertEqual((s.get_player(RED).hand[BRICK], s.get_player(RED).hand[WOOD]), (4, 1))
-        # The original offer still stands; only the counter executed.
-        self.assertEqual([t.trade_id for t in s.trades], [tid])
+        self.assertEqual(s.trades, [])
 
     def test_counter_rules(self):
         s, tid = self.offer(main_phase())
@@ -327,12 +329,36 @@ class Lifecycle(TradeCase):
         self.refused(s, RED, "buyDevCard")
         self.assertEqual([t.trade_id for t in s.trades], ids)
 
-    def test_trade_actions_do_not_close_other_offers(self):
+    def test_executing_an_offer_closes_every_other_offer(self):
         s, (a, b, c) = self.standing()
-        s, _ = self.act(s, RED, "confirmTrade", trade_id=a, partner=WHITE)
-        self.assertEqual([t.trade_id for t in s.trades], [b, c])
-        s, _ = self.offer(s, offering={WHEAT: 1}, requesting={ORE: 1})
-        self.assertEqual(len(s.trades), 3)
+        s, events = self.act(s, RED, "confirmTrade", trade_id=a, partner=WHITE)
+        self.assert_closed_by(events, [b, c], creators=("red", "blue"))
+        self.assertEqual(events[-1]["type"], "tradeExecuted")
+        self.assertEqual(len(events), 3)
+        self.assertEqual(s.trades, [])
+        self.assertEqual(self.refused(s, BLUE, "acceptTrade", trade_id=b), "Trade not found")
+        self.assertEqual(self.refused(s, RED, "confirmTrade", trade_id=c), "Trade not found")
+        # The mover may make new offers after it, and they stand as usual.
+        s, d = self.offer(s, offering={WHEAT: 1}, requesting={ORE: 1})
+        self.assertEqual([t.trade_id for t in s.trades], [d])
+
+    def test_taking_a_counter_closes_the_offer_it_answered(self):
+        s, (a, b, c) = self.standing()
+        s, events = self.act(s, RED, "confirmTrade", trade_id=c)
+        self.assert_closed_by(events, [a, b], creators=("red", "red"))
+        self.assertEqual(events[-1]["type"], "tradeExecuted")
+        self.assertEqual(s.trades, [])
+
+    def test_other_trade_actions_leave_offers_standing(self):
+        s, (a, b, c) = self.standing()
+        s, d = self.offer(s, offering={WHEAT: 1}, requesting={ORE: 1})
+        s, _ = self.act(s, BLUE, "acceptTrade", trade_id=b)
+        s, _ = self.act(s, WHITE, "rejectTrade", trade_id=b)
+        s, _ = self.act(s, BLUE, "withdrawTradeAnswer", trade_id=b)
+        s, _ = self.offer(s, ORANGE, offering={ORE: 1}, requesting={WOOD: 1}, counter_to=a)
+        s, events = self.act(s, RED, "cancelTrade", trade_id=d)
+        self.assertEqual([e["reason"] for e in events], ["cancelled"])
+        self.assertEqual([t.trade_id for t in s.trades], [a, b, c, d + 1])
 
     def test_unanswered_offers_never_block_the_mover(self):
         s, ids = self.standing()
@@ -394,17 +420,15 @@ class Terms(TradeCase):
         s = main_phase(hands={RED: {WOOD: 1}, BLUE: {BRICK: 1}, WHITE: {BRICK: 1},
                               ORANGE: {}})
         s, a = self.offer(s, offering={WOOD: 1}, requesting={BRICK: 1})
-        s, b = self.offer(s, offering={WOOD: 1}, requesting={BRICK: 1, SHEEP: 1})
-        s.get_player(BLUE).hand[SHEEP] = 1
         s, _ = self.act(s, BLUE, "acceptTrade", trade_id=a)
-        s, _ = self.act(s, BLUE, "acceptTrade", trade_id=b)
-        s, _ = self.act(s, WHITE, "acceptTrade", trade_id=a)
-        s, _ = self.act(s, RED, "confirmTrade", trade_id=a, partner=BLUE)
-        # Red's wood is gone, and so is Blue's brick.
-        self.assertEqual(self.refused(s, RED, "confirmTrade", trade_id=b, partner=BLUE),
+        # No move changes a hand while an offer stands (every move closes the
+        # offers); the check guards the trade all the same.
+        s.get_player(RED).hand[WOOD] = 0
+        self.assertEqual(self.refused(s, RED, "confirmTrade", trade_id=a, partner=BLUE),
                          "red no longer has the offered resources")
         s.get_player(RED).hand[WOOD] = 1
-        self.assertEqual(self.refused(s, RED, "confirmTrade", trade_id=b, partner=BLUE),
+        s.get_player(BLUE).hand[BRICK] = 0
+        self.assertEqual(self.refused(s, RED, "confirmTrade", trade_id=a, partner=BLUE),
                          "blue no longer has the requested resources")
 
     def test_both_sides_non_empty_positive_and_distinct(self):
@@ -451,7 +475,7 @@ class Serialization(TradeCase):
         self.assertEqual(back.next_trade_id, s.next_trade_id)
         # The restored game carries on: the mover takes the counter.
         back, events = self.act(back, RED, "confirmTrade", trade_id=cid)
-        self.assertEqual(events[0]["partner"], "red")
+        self.assertEqual(events[-1]["partner"], "red")
 
     def test_state_without_counter_field_still_loads(self):
         s, tid = self.offer(main_phase())

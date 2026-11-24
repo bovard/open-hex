@@ -35,7 +35,8 @@ from .types import (
 # Player-to-player trade actions. Any other action closes every standing offer,
 # counter-offers included, before it runs: colonist.io takes the current
 # player's offers down when they make any other move (a build, a development
-# card, a bank trade, ending the turn).
+# card, a bank trade, ending the turn). Executing one offer (confirmTrade)
+# closes all the others the same way.
 PLAYER_TRADE_ACTIONS = frozenset({
     "proposeTrade",
     "acceptTrade",
@@ -412,9 +413,10 @@ class OpenHexEngine:
     # accept, reject or counter; a counter-offer is a new offer from that seat
     # to the current player alone. Answers can change while the offer stands.
     # The current player executes an offer with one seat that accepted it
-    # (confirmTrade), or takes a counter-offer the same way. Nothing ever waits
-    # on an answer: the pending action stays None and the current player can
-    # always move on, which closes every standing offer.
+    # (confirmTrade), or takes a counter-offer the same way; every other offer
+    # closes then. Nothing ever waits on an answer: the pending action stays
+    # None and the current player can always move on, which closes every
+    # standing offer.
 
     def _require_trading_open(self, s: GameState) -> str | None:
         if s.is_setup_phase:
@@ -1064,6 +1066,8 @@ class OpenHexEngine:
 
     def _exec_confirm_trade(self, s: GameState, a: Action, events: list[Event]):
         trade = self._find_trade(s, a.trade_id)
+        # Every other offer, counter-offers included, closes before the trade's own event
+        self._close_trades(s, [t for t in s.trades if t is not trade], "currentPlayerMoved", events)
         counterpart = self._trade_counterpart(trade, a)
         creator = s.get_player(trade.proposer)
         other = s.get_player(counterpart)
@@ -1073,7 +1077,7 @@ class OpenHexEngine:
         other.hand = subtract_resources(other.hand, trade.requesting)
         other.hand = add_resources(other.hand, trade.offering)
 
-        s.trades = [t for t in s.trades if t.trade_id != trade.trade_id]
+        s.trades = []
         events.append(Event(type="tradeExecuted", player=trade.proposer, partner=counterpart,
                             trade_id=trade.trade_id,
                             offering=trade.offering, requesting=trade.requesting))
@@ -1085,7 +1089,8 @@ class OpenHexEngine:
                       events: list[Event]):
         """Take offers down, one tradeCancelled event each, naming the
         offer's creator and why: "cancelled" (by its creator), "allRejected"
-        or "currentPlayerMoved" (any other move, ending the turn included)."""
+        or "currentPlayerMoved" (any other move, confirming another offer and
+        ending the turn included)."""
         closing = {t.trade_id for t in trades}
         s.trades = [t for t in s.trades if t.trade_id not in closing]
         for t in trades:
