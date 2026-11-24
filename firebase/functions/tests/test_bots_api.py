@@ -54,6 +54,9 @@ class _DocRef:
             raise KeyError(self.id)
         self._store[self.id].update(data)
 
+    def delete(self):
+        self._store.pop(self.id, None)
+
 
 class _Query:
     def __init__(self, store, filters=(), limit=None):

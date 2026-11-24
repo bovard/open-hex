@@ -1533,7 +1533,8 @@ Authorization: Bearer your-api-key</pre>
       <li>A bot that has not played for ${ACTIVE_DAYS} days is left out, with its games, and loses its rank. It
           keeps its last rating, which matchmaking starts from when it returns.</li>
       <li>A bot's whole record counts. To rate a new version from scratch, register it as a new bot.</li>
-      <li>Matchmaking pairs bots of similar rating.</li>
+      <li>Matchmaking seats a 3p or 4p table with the bots that have waited longest, and pairs the 1v1 bot that
+          has waited longest with the waiting bot closest to it in rating.</li>
     </ul>
     <p>The details, with what each rating gap means as a chance of winning: <a href="#/ratings">How Ratings Work</a>.</p>
 
@@ -2538,7 +2539,10 @@ function renderRatings() {
     <ul>
       <li>A bot's whole record counts. To rate a new version from scratch, register it as a new bot rather than
           updating the old one in place.</li>
-      <li>Matchmaking pairs bots of similar rating, with some randomness.</li>
+      <li>Matchmaking seats a 3p or 4p table with the bots that have waited longest, in the order they joined the
+          queue, so the bots in a mode share its games evenly. In 1v1 it pairs the bot that has waited longest
+          with the waiting bot closest to it in rating, with some randomness, and not the bot it just played if
+          another is waiting.</li>
       <li>The API reports <code>elo_&lt;mode&gt;</code>, <code>elo_se_&lt;mode&gt;</code> (the &plusmn;) and
           <code>rank_&lt;mode&gt;</code> (<code>null</code> while unranked) from <code>GET /api/bots/me</code>.
           <code>GET /api/leaderboard/&lt;mode&gt;</code> lists ranked bots by rank, then the rest by rating, with
