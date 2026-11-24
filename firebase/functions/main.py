@@ -299,14 +299,14 @@ def join_queue(bot):
     db = _get_db()
     bot_id = bot["botId"]
 
-    # Check not in active game
-    active = list(
-        db.collection("games")
+    # Check not in active game (one it has left does not count)
+    active = [
+        g for g in db.collection("games")
         .where("status", "==", "active")
         .where("playerBotIds", "array_contains", bot_id)
-        .limit(1)
         .get()
-    )
+        if bot_id not in (g.to_dict().get("leftBotIds") or [])
+    ]
     if active:
         return jsonify({"detail": "Already in an active game for this mode"}), 409
 
@@ -388,6 +388,8 @@ def list_games(bot):
     result = []
     for doc in docs:
         game = doc.to_dict()
+        if status == "active" and bot["botId"] in (game.get("leftBotIds") or []):
+            continue   # the bot left it: nothing more to play there
         result.append(_build_game_info(doc.id, game))
     return jsonify(result)
 

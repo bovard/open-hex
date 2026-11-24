@@ -91,6 +91,8 @@ class OpenHexEngine:
     def _validate(self, s: GameState, a: Action) -> str | None:
         if s.winner is not None:
             return "Game is over"
+        if a.player in s.left_players:
+            return "You have left this game"
 
         handler = {
             "placeInitialSettlement": self._validate_place_initial_settlement,
@@ -116,6 +118,7 @@ class OpenHexEngine:
             "discardResources": self._validate_discard_resources,
             "placeFreeRoad": self._validate_place_free_road,
             "endTurn": self._validate_end_turn,
+            "leaveGame": self._validate_leave_game,
         }.get(a.type)
 
         if handler is None:
@@ -430,7 +433,7 @@ class OpenHexEngine:
         the current player, only the current player for a counter-offer."""
         if trade.counter_to is not None:
             return [s.current_player]
-        return [c for c in s.turn_order if c != trade.proposer]
+        return [c for c in s.seats_in_play() if c != trade.proposer]
 
     def _validate_offer_terms(self, s: GameState, a: Action) -> str | None:
         """Terms shared by offers and counter-offers: both sides non-empty
@@ -715,6 +718,13 @@ class OpenHexEngine:
             return "Must roll dice first"
         return None
 
+    def _validate_leave_game(self, s: GameState, a: Action) -> str | None:
+        if a.player not in s.turn_order:
+            return f"No seat {a.player}"
+        if len(s.seats_in_play()) <= 2:
+            return "Only two seats are playing; the game ends instead"
+        return None
+
     # -----------------------------------------------------------------------
     # Execution
     # -----------------------------------------------------------------------
@@ -744,6 +754,7 @@ class OpenHexEngine:
             "discardResources": self._exec_discard_resources,
             "placeFreeRoad": self._exec_place_free_road,
             "endTurn": self._exec_end_turn,
+            "leaveGame": self._exec_leave_game,
         }[a.type]
         handler(s, a, events)
 
@@ -802,7 +813,7 @@ class OpenHexEngine:
                 # Setup complete — transition to main phase
                 s.is_setup_phase = False
                 s.turn_number = 1
-                s.current_player = s.turn_order[0]
+                s.current_player = s.seats_in_play()[0]
                 s.pending_action = PendingAction(type="rollDice")
                 # Reshuffle balanced dice for main phase
                 if s.config.dice_mode == DiceMode.BALANCED and s.balanced_dice is not None:
@@ -810,6 +821,9 @@ class OpenHexEngine:
             else:
                 s.current_player = s.turn_order[n - 1 - s.setup_index]
                 s.pending_action = PendingAction(type="placeInitialSettlement")
+        # A seat that left places nothing more
+        if s.is_setup_phase and s.current_player in s.left_players:
+            self._advance_setup(s)
 
     # -- dice ----------------------------------------------------------------
 
@@ -833,7 +847,7 @@ class OpenHexEngine:
                 s.balanced_dice = BalancedDice()
             player = s.current_player.value if s.current_player else None
             return s.balanced_dice.draw(self.rng, current_player=player,
-                                        num_players=s.config.num_players)
+                                        num_players=len(s.seats_in_play()))
         return self.rng.randint(1, 6), self.rng.randint(1, 6)
 
     def _distribute_resources(self, s: GameState, total: int, events: list[Event]):
@@ -850,7 +864,7 @@ class OpenHexEngine:
 
             for v in tile.location.vertices():
                 building = s.board.building_at(v)
-                if building is None:
+                if building is None or building.player in s.left_players:
                     continue
                 amount = 2 if any(c.vertex == v for c in s.board.cities) else 1
                 production[building.player][res] = production[building.player].get(res, 0) + amount
@@ -1158,9 +1172,12 @@ class OpenHexEngine:
         # Remove this player from pending discards
         del s.pending_action.players[a.player]
         if not s.pending_action.players:
-            # The robber next, unless every hex is protected (friendly robber): then it stays
-            mover = s.current_player
-            s.pending_action = PendingAction(type="moveRobber") if mover and self._robber_has_legal_hex(s, mover) else None
+            self._after_discards(s)
+
+    def _after_discards(self, s: GameState):
+        # The robber next, unless every hex is protected (friendly robber): then it stays
+        mover = s.current_player
+        s.pending_action = PendingAction(type="moveRobber") if mover and self._robber_has_legal_hex(s, mover) else None
 
     def _exec_place_free_road(self, s: GameState, a: Action, events: list[Event]):
         edge = a.edge()
@@ -1192,11 +1209,54 @@ class OpenHexEngine:
             if p.color == a.player:
                 p.dev_cards_bought_this_turn.clear()
 
-        # Advance to next player
+        # Advance to the next seat in play
         idx = s.turn_order.index(s.current_player)
-        s.current_player = s.turn_order[(idx + 1) % len(s.turn_order)]
+        n = len(s.turn_order)
+        s.current_player = next(s.turn_order[(idx + k) % n] for k in range(1, n + 1)
+                                if s.turn_order[(idx + k) % n] not in s.left_players)
         s.turn_number += 1
         s.pending_action = PendingAction(type="rollDice")
+
+    # -- leaving -------------------------------------------------------------
+
+    def _exec_leave_game(self, s: GameState, a: Action, events: list[Event]):
+        """A seat leaves the game (the server's move for a seat that missed
+        its deadline three times in a row, while two other seats play on).
+        Play goes on as if it had never been there: its cards go back to the
+        bank, its buildings stay on the board but produce nothing, an award
+        it held goes to whoever else qualifies, a discard it owed is dropped,
+        and its turn, if it was its turn, ends."""
+        player = s.get_player(a.player)
+        returned = {r: n for r, n in player.hand.items() if n > 0}
+        self._return_to_bank(s, returned)
+        player.hand = {}
+        s.left_players.append(a.player)
+        events.append(Event(type="playerLeft", player=a.player, resources=returned))
+
+        # The awards are decided again among the seats in play: one it held,
+        # or one nobody held because it tied
+        self._update_longest_road(s, events)
+        if s.largest_army_player in (a.player, None):
+            self._reaward_largest_army(s, events)
+        # Balanced dice share the sevens among the seats in play
+        bd = s.balanced_dice
+        if bd is not None:
+            bd.sevens_by_player.pop(a.player.value, None)
+            if bd.seven_streak_player == a.player.value:
+                bd.seven_streak_player, bd.seven_streak_count = None, 0
+
+        pa = s.pending_action
+        if pa is not None and pa.type == "discardResources" and a.player in (pa.players or {}):
+            del pa.players[a.player]
+            if not pa.players:
+                self._after_discards(s)
+        if s.current_player == a.player:
+            if s.is_setup_phase:
+                s.setup_placed_settlement = False
+                s.last_setup_settlement = None
+                self._advance_setup(s)
+            else:
+                self._exec_end_turn(s, Action(type="endTurn", player=a.player), events)
 
     # -----------------------------------------------------------------------
     # The move made for a seat that misses its deadline
@@ -1285,7 +1345,7 @@ class OpenHexEngine:
         best_player = None
         best_length = 4  # minimum 5 to qualify
 
-        for color in s.turn_order:
+        for color in s.seats_in_play():
             length = self._compute_longest_road(s, color)
             s.get_player(color).longest_road_length = length
             if length > best_length:
@@ -1295,7 +1355,7 @@ class OpenHexEngine:
         # Check for ties — current holder keeps it on tie
         if best_player is not None:
             # If someone else also has this length, check if current holder is one of them
-            tied = [c for c in s.turn_order
+            tied = [c for c in s.seats_in_play()
                     if s.get_player(c).longest_road_length == best_length]
             if len(tied) > 1 and s.longest_road_player in tied:
                 best_player = s.longest_road_player
@@ -1359,6 +1419,9 @@ class OpenHexEngine:
             return
 
         if s.largest_army_player is None:
+            if any(s.get_player(c).knights_played >= p.knights_played
+                   for c in s.seats_in_play() if c != player):
+                return   # still tied (possible only after the holder left)
             s.largest_army_player = player
             events.append(Event(type="largestArmyAwarded",
                                 player=player, knights=p.knights_played))
@@ -1368,6 +1431,20 @@ class OpenHexEngine:
                 s.largest_army_player = player
                 events.append(Event(type="largestArmyAwarded",
                                     player=player, knights=p.knights_played))
+
+    def _reaward_largest_army(self, s: GameState, events: list[Event]):
+        """Largest Army after a seat left, while it held the award or
+        nobody did: the seat in play with the most knights, at least 3,
+        unless another seat in play has as many; otherwise nobody until a
+        knight breaks the tie."""
+        knights = {c: s.get_player(c).knights_played for c in s.seats_in_play()}
+        most = max(knights.values())
+        leaders = [c for c, n in knights.items() if n == most]
+        holder = leaders[0] if most >= 3 and len(leaders) == 1 else None
+        if holder != s.largest_army_player:
+            s.largest_army_player = holder
+            events.append(Event(type="largestArmyAwarded", player=holder,
+                                knights=most if holder else 0))
 
     # -----------------------------------------------------------------------
     # Victory
@@ -1414,7 +1491,8 @@ class OpenHexEngine:
         targets = set()
         for v in location.vertices():
             b = s.board.building_at(v)
-            if b and b.player != thief and s.get_player(b.player).hand_size > 0:
+            if (b and b.player != thief and b.player not in s.left_players
+                    and s.get_player(b.player).hand_size > 0):
                 targets.add(b.player)
         return list(targets)
 

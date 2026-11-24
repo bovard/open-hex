@@ -305,7 +305,7 @@ function deriveStateAtPosition(replay, pos) {
   const players = {};
   for (const c of replay.turnOrder) {
     players[c] = { hand: {}, devCards: {}, devCardsBoughtThisTurn: {}, settlements: 0, cities: 0, roads: 0,
-      knightsPlayed: 0, vpCards: 0, longestRoad: false, largestArmy: false, publicVP: 0 };
+      knightsPlayed: 0, vpCards: 0, longestRoad: false, largestArmy: false, publicVP: 0, left: false };
   }
 
   const buildings = []; // { vertex, player, type: "settlement"|"city" }
@@ -465,6 +465,10 @@ function deriveStateAtPosition(replay, pos) {
           _add(players[ev.partner].hand, ev.offering);
         }
         break;
+      case "playerLeft":
+        // Its cards went back to the bank; its turns are skipped from here on
+        if (players[p]) { players[p].hand = {}; players[p].left = true; }
+        break;
       case "longestRoadAwarded":
         if (longestRoadPlayer && players[longestRoadPlayer]) {
           players[longestRoadPlayer].longestRoad = false;
@@ -591,9 +595,9 @@ function renderReplayStep() {
     if (p.largestArmy) awards += '<span style="color:#f472b6; font-size:0.7rem; margin-right:0.3rem">⚔️ LA</span>';
 
     playersHtml += `
-      <div style="background:var(--card); border:2px solid ${pc}; border-radius:0.5rem; padding:0.5rem 0.75rem; flex:1; min-width:200px">
+      <div style="background:var(--card); border:2px solid ${pc}; border-radius:0.5rem; padding:0.5rem 0.75rem; flex:1; min-width:200px${p.left ? "; opacity:0.5" : ""}">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.3rem">
-          <strong style="color:${pc}; text-transform:capitalize">${esc(color)}</strong>
+          <strong style="color:${pc}; text-transform:capitalize">${esc(color)}${p.left ? ' <span style="color:var(--muted); font-size:0.7rem; text-transform:none">left the game</span>' : ""}</strong>
           <span style="font-size:1.1rem; font-weight:800">${vpDisplay} VP</span>
         </div>
         <div style="font-size:0.8rem; margin-bottom:0.2rem">${resHtml} <span style="color:var(--muted)">(${handTotal})</span></div>
@@ -695,8 +699,9 @@ function _describeEvent(ev, pName) {
       return `${pName} traded ${_resText(ev.offering)} to ${partner} for ${_resText(ev.requesting)}`;
     }
     case "tradeCancelled": return `${pName}'s offer #${esc(ev.tradeId)} closed (${esc(ev.reason || "cancelled")})`;
-    case "longestRoadAwarded": return `${pName} earned Longest Road (${ev.length || "?"})`;
-    case "largestArmyAwarded": return `${pName} earned Largest Army (${ev.knights || "?"})`;
+    case "longestRoadAwarded": return ev.player ? `${pName} earned Longest Road (${ev.length || "?"})` : "Nobody holds Longest Road";
+    case "largestArmyAwarded": return ev.player ? `${pName} earned Largest Army (${ev.knights || "?"})` : "Nobody holds Largest Army";
+    case "playerLeft": return `${pName} left the game; its cards went back to the bank`;
     case "victoryPointRevealed": return `${pName} revealed a VP card`;
     case "gameWon": return `${pName} won the game! 🎉`;
     default: return `<span style="color:var(--accent)">${esc(ev.type)}</span> ${pName || ""}`;
@@ -1377,8 +1382,10 @@ function renderGuide() {
     <p>You have <strong>60 seconds</strong> per action. If you miss the deadline the server makes
        the pending move for you (it rolls, discards your most-held cards, moves the robber where it
        robs nobody if it can, steals from the first target, places a free road, or ends your turn)
-       and records a strike; three strikes in a row abort the game as your loss. A move of your
-       own clears your strikes. Moves made for you are marked <code>auto</code> in the action log.
+       and records a strike. Three strikes in a row and you are out, with a loss: in 3p and 4p you leave
+       the game and it goes on without you (your cards go back to the bank, your buildings produce
+       nothing and your turns are skipped); in 1v1, or with only two seats left, the game is aborted
+       and the other seat wins. A move of your own clears your strikes. Moves made for you are marked <code>auto</code> in the action log.
        Player trading counts as one action: proposing, answering, countering, confirming or
        cancelling a trade, by any seat, neither resets the deadline nor clears a strike, so the
        trades between two moves share the 60 seconds of the move that follows them.</p>
@@ -1495,8 +1502,9 @@ Authorization: Bearer your-api-key</pre>
       <tr><td><code>tradeExecuted</code></td><td>player (offer's creator, gave offering), partner, tradeId, offering, requesting</td></tr>
       <tr><td><code>tradeCancelled</code></td><td>player (offer's creator), tradeId, reason</td></tr>
       <tr><td><code>longestRoadAwarded</code></td><td>player (null when nobody qualifies), length</td></tr>
-      <tr><td><code>largestArmyAwarded</code></td><td>player, knights</td></tr>
+      <tr><td><code>largestArmyAwarded</code></td><td>player (null when nobody qualifies), knights</td></tr>
       <tr><td><code>turnEnded</code></td><td>player, turnNumber</td></tr>
+      <tr><td><code>playerLeft</code></td><td>player, resources (returned to the bank)</td></tr>
       <tr><td><code>gameWon</code></td><td>player, victoryPoints</td></tr>
     </table>
 
@@ -1518,7 +1526,8 @@ Authorization: Bearer your-api-key</pre>
        chance of winning a table is in proportion to 10<sup>rating/400</sup> among the seats.</p>
     <ul>
       <li>The order games were played in makes no difference, and ratings change at the next update, not as a
-          game ends. A game aborted for timeouts counts, won by the best-placed seat not at fault.</li>
+          game ends. A game aborted for timeouts counts, won by the best-placed seat not at fault. A bot that
+          leaves a 3p or 4p game for timeouts loses it, to whoever wins among the seats left.</li>
       <li>The &plusmn; is the rating's standard error. A bot with fewer than 20 rated games is provisional and
           is listed after the ranked bots.</li>
       <li>A bot that has not played for ${ACTIVE_DAYS} days is left out, with its games, and loses its rank. It
@@ -2064,6 +2073,7 @@ function renderBoardSetup() {
       <tr><td><code>board.roads</code></td><td>array</td><td>Placed roads (<code>edge</code> + player color)</td></tr>
       <tr><td><code>turnOrder</code></td><td>array</td><td>Player colors in turn order</td></tr>
       <tr><td><code>currentPlayer</code></td><td>string</td><td>Color of the player whose turn it is</td></tr>
+      <tr><td><code>leftPlayers</code></td><td>array</td><td>Colors of the seats that left the game (timed out); their turns are skipped</td></tr>
       <tr><td><code>isSetupPhase</code></td><td>boolean</td><td>True during initial placement</td></tr>
       <tr><td><code>players</code></td><td>array</td><td>Player states (hand, dev cards, knights, etc.)</td></tr>
       <tr><td><code>pending</code></td><td>object|null</td><td>Pending action required (discard, robber move, steal, etc.)</td></tr>
@@ -2411,6 +2421,18 @@ function renderEventsReference() {
   "turnNumber": 12
 }</pre>
 
+    <h3>playerLeft</h3>
+    <p>A seat left a 3p or 4p game after three missed deadlines in a row. Its cards (<code>resources</code>) went
+       back to the bank; its buildings stay but produce nothing, nobody can rob it or trade with it, and its turns
+       are skipped. An award it held is decided again among the other seats (a <code>longestRoadAwarded</code> or
+       <code>largestArmyAwarded</code> event follows, with no player on a tie), then <code>turnEnded</code> if it
+       was its turn.</p>
+    <pre>{
+  "type": "playerLeft",
+  "player": "orange",
+  "resources": {"wood": 2, "ore": 1}
+}</pre>
+
     <h3>gameWon</h3>
     <p>A player has won the game.</p>
     <pre>{
@@ -2448,8 +2470,9 @@ function renderEventsReference() {
       <tr><td><code>tradeExecuted</code></td><td>player, partner, tradeId, offering, requesting</td><td>Main</td></tr>
       <tr><td><code>tradeCancelled</code></td><td>player, tradeId, reason</td><td>Main</td></tr>
       <tr><td><code>longestRoadAwarded</code></td><td>player (null when nobody qualifies), length</td><td>Main</td></tr>
-      <tr><td><code>largestArmyAwarded</code></td><td>player, knights</td><td>Main</td></tr>
+      <tr><td><code>largestArmyAwarded</code></td><td>player (null when nobody qualifies), knights</td><td>Main</td></tr>
       <tr><td><code>turnEnded</code></td><td>player, turnNumber</td><td>Main</td></tr>
+      <tr><td><code>playerLeft</code></td><td>player, resources</td><td>Any</td></tr>
       <tr><td><code>gameWon</code></td><td>player, victoryPoints</td><td>Main</td></tr>
     </table>
   </div>
@@ -2495,7 +2518,8 @@ function renderRatings() {
       <li>A bot that has not played for ${ACTIVE_DAYS} days is left out, with its games. A 1v1 game against it no
           longer counts. A 3p or 4p game an active bot won still counts, as a game among the table's active bots;
           one the idle bot won does not.</li>
-      <li>A game aborted for timeouts counts, won by the best-placed seat not at fault.</li>
+      <li>A game aborted for timeouts counts, won by the best-placed seat not at fault. A bot that leaves a 3p or
+          4p game for timeouts loses it, to whoever wins among the seats left.</li>
       <li>The order games were played in makes no difference. A bot's rating can move while it is not playing,
           as its opponents play other bots or go idle.</li>
     </ul>

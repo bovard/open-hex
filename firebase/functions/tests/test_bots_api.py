@@ -62,18 +62,26 @@ class _Query:
         self._limit = limit
 
     def where(self, field, op, value):
-        assert op == "=="
-        return _Query(self._store, self._filters + ((field, value),), self._limit)
+        assert op in ("==", "array_contains")
+        return _Query(self._store, self._filters + ((field, op, value),), self._limit)
 
     def limit(self, n):
         return _Query(self._store, self._filters, n)
 
+    def order_by(self, field, direction=None):
+        return self   # documents come back in insertion order
+
     def stream(self):
+        def match(data, field, op, value):
+            return value in (data.get(field) or []) if op == "array_contains" else data.get(field) == value
         hits = [
             _Snapshot(doc_id, data) for doc_id, data in self._store.items()
-            if all(data.get(f) == v for f, v in self._filters)
+            if all(match(data, *f) for f in self._filters)
         ]
         return iter(hits if self._limit is None else hits[:self._limit])
+
+    def get(self):
+        return list(self.stream())
 
 
 class _Collection(_Query):
