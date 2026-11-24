@@ -1,13 +1,15 @@
-"""The matchmaker seeds each game with the most uncertain, longest-waiting bot
-and fills it with the bots nearest the seed in rating.
+"""The matchmaker picks a seed for each game, then seats the closest-rated
+table around it.
 
-It once sorted the queue by rating and seated full tables from the bottom up,
-so whoever did not fit, the highest rated, sat out round after round. Then it
-seated bots in queue order (provisional bots first), which shared the games
-evenly but put bots of any rating at one table: a bot rated far below the
-rest spoils a strong game. Now the seed is the waiting bot with the highest
-rating standard error times time queued, and the rest of its table are the
-waiting bots nearest it in rating.
+The seed is the waiting bot with the highest seed priority: points for an
+uncertain rating, for time since its last game, for time since it last
+seeded, and for a rating near the top of the leaderboard; a bot idle for 30
+minutes seeds first. The rest of the table are the waiting bots that make
+the table of the smallest rating spread with the seed, whatever their own
+priority. (Before, the seed was the bot with the highest standard error
+times time queued: the top bot seeded 1% of tables and the two widest-rated
+bots about 90%. Before that, bots were seated in queue order, which shared
+games evenly but put bots of any rating at one table.)
 The Firebase and Google Cloud packages are stood in for, so no project or
 credentials are needed. Run from the repository root:
     python3 -m unittest discover -s firebase/functions/tests -t firebase/functions
@@ -68,11 +70,17 @@ class MatchmakerCase(unittest.TestCase):
         """Bots with these ratings and a standard error of 50 unless `se`
         gives a bot's (None: no ratings refit has rated it)."""
         for bot_id, rating in ratings.items():
-            doc = {"name": bot_id, f"elo{mode}": rating, **extra.get(bot_id, {})}
+            doc = {"name": bot_id, "mode": mode, f"elo{mode}": rating, **extra.get(bot_id, {})}
             bot_se = (se or {}).get(bot_id, 50.0)
             if bot_se is not None:
                 doc[f"eloSe{mode}"] = bot_se
             self.db.collection("bots").document(bot_id).set(doc)
+
+    def bot(self, bot_id):
+        return self.db.data["bots"][bot_id]
+
+    def ago(self, minutes):
+        return (self.now - timedelta(minutes=minutes)).isoformat()
 
     def join(self, mode, *bot_ids):
         """Queue the bots now, in this order (the fake returns documents as inserted)."""
@@ -94,67 +102,122 @@ class MatchmakerCase(unittest.TestCase):
             return self.mm._match_mode(mode, players, now=self.now)
 
 
+class SeedPriority(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.priority = staticmethod(_import_matchmaker().seed_priority)
+
+    def test_points(self):
+        # A settled bot at the top, just finished a game, never seeded: 6 + 10
+        self.assertEqual(self.priority(50.0, 0.0, None, 0.0), (0, 16.0))
+        # Idle 20 minutes: 2 points; seeded 60 minutes ago: 2 points
+        self.assertEqual(self.priority(50.0, 20.0, 60.0, 0.0), (0, 14.0))
+        # 400 below the top: half the top points
+        self.assertEqual(self.priority(50.0, 0.0, 0.0, 400.0), (0, 5.0))
+        # A standard error of 100: 8 points; a narrower one counts nothing
+        self.assertEqual(self.priority(100.0, 0.0, 0.0, 0.0), (0, 18.0))
+        self.assertEqual(self.priority(20.0, 0.0, 0.0, 0.0), (0, 10.0))
+
+    def test_a_new_bot_outscores_any_settled_bot(self):
+        new = self.priority(246.0, 0.0, None, 400.0)
+        settled = self.priority(50.0, 29.0, 600.0, 0.0)
+        self.assertGreater(new, settled)
+
+    def test_time_since_seeding_counts_up_to_three_hours(self):
+        self.assertEqual(self.priority(50.0, 0.0, 600.0, 0.0), self.priority(50.0, 0.0, None, 0.0))
+        self.assertEqual(self.priority(50.0, 0.0, 180.0, 0.0), self.priority(50.0, 0.0, None, 0.0))
+
+    def test_thirty_minutes_idle_seeds_first(self):
+        guarded = self.priority(50.0, 30.0, 0.0, 1000.0)
+        self.assertGreater(guarded, self.priority(246.0, 29.0, None, 0.0))
+        self.assertGreater(self.priority(50.0, 45.0, 0.0, 1000.0), guarded)
+
+
 class TheSeed(MatchmakerCase):
-    RATINGS = {"low": 1200, "high": 1800, "h2": 1750, "h3": 1700, "l2": 1250}
-
-    def test_the_longest_waiting_seeds_when_equally_uncertain(self):
-        self.bots("4p", {"a": 1500, "b": 1520, "c": 1480, "d": 1450, "e": 1800})
-        self.join("4p", "e")
-        self.wait(1)
-        self.join("4p", "a", "b", "c", "d")
-        self.match("4p", jitter=False)
-        # e seeds, with the three nearest it in rating
-        self.assertEqual(self.tables, [["e", "c", "a", "b"]])
-        self.assertEqual(self.queued(), ["d"])
-
-    def test_a_more_uncertain_bot_seeds_before_a_longer_waiting_one(self):
-        # low: 50 x (240 + 60) = 15000; high: 300 x 60 = 18000
-        self.bots("4p", self.RATINGS, se={"high": 300.0})
-        self.join("4p", "low")
-        self.wait(240)
-        self.join("4p", "high", "h2", "h3", "l2")
-        self.match("4p", jitter=False)
-        self.assertEqual(self.tables, [["high", "l2", "h3", "h2"]])
-        self.assertEqual(self.queued(), ["low"])
-
-    def test_waiting_long_enough_outweighs_uncertainty(self):
-        # low: 50 x (480 + 60) = 27000; high: 300 x 60 = 18000
-        self.bots("4p", self.RATINGS, se={"high": 300.0})
-        self.join("4p", "low")
-        self.wait(480)
-        self.join("4p", "high", "h2", "h3", "l2")
-        self.match("4p", jitter=False)
-        self.assertEqual(self.tables, [["low", "l2", "h3", "h2"]])
-        self.assertEqual(self.queued(), ["high"])
-
-    def test_a_bot_not_yet_rated_counts_as_most_uncertain(self):
-        # low: 50 x (180 + 60) = 12000; high: PRIOR_SE (about 246) x 60
-        self.bots("4p", self.RATINGS, se={"high": None})
-        self.join("4p", "low")
-        self.wait(180)
-        self.join("4p", "high", "h2", "h3", "l2")
-        self.match("4p", jitter=False)
-        self.assertEqual(self.tables[0][0], "high")
-
-
-class ClosestTable(MatchmakerCase):
-    def test_a_low_rated_bot_is_kept_out_of_a_strong_table(self):
+    def test_the_top_rated_seeds_when_all_else_is_equal(self):
         self.bots("4p", LIVE_4P)
-        self.join("4p", "nn-b")
-        self.wait(30)
-        self.join("4p", "nn", "l12", "ppo", "l13", "catanrl")
+        self.join("4p", *LIVE_4P)
         self.match("4p", jitter=False)
         self.assertEqual(self.tables, [["nn-b", "ppo", "l12", "nn"]])
         self.assertEqual(self.queued(), ["l13", "catanrl"])
 
-    def test_a_low_rated_seed_gets_a_table_of_its_own_level(self):
-        self.bots("4p", LIVE_4P)
-        self.join("4p", "catanrl")
-        self.wait(30)
-        self.join("4p", "nn-b", "nn", "l12", "ppo", "l13")
+    def test_a_new_bot_seeds_first(self):
+        self.bots("4p", dict(LIVE_4P, new=1350.0), se={"new": None})
+        self.join("4p", *LIVE_4P, "new")
+        self.match("4p", jitter=False)
+        self.assertEqual(self.tables, [["new", "l13", "ppo", "l12"]])
+
+    def test_a_bot_that_has_not_seeded_for_a_while_gets_its_own_table(self):
+        # Every bot but the lowest rated has just seeded a game
+        seeded = {b: {"lastSeededAt": self.ago(0)} for b in LIVE_4P if b != "catanrl"}
+        self.bots("4p", LIVE_4P, **seeded)
+        self.join("4p", *LIVE_4P)
         self.match("4p", jitter=False)
         self.assertEqual(self.tables, [["catanrl", "l13", "ppo", "l12"]])
-        self.assertEqual(self.queued(), ["nn-b", "nn"])
+
+    def test_idle_time_counts_from_its_last_game(self):
+        self.bots("1v1", {"a": 1500, "b": 1500}, b={"lastGameAt": self.ago(20)})
+        self.join("1v1", "a", "b")
+        self.match("1v1", jitter=False)
+        self.assertEqual(self.tables, [["b", "a"]])
+
+    def test_or_from_joining_if_its_last_game_ended_later(self):
+        # a left a game and queued again ten minutes ago; the game has just
+        # ended. b finished a game five minutes ago.
+        self.bots("1v1", {"a": 1500, "b": 1500})
+        self.join("1v1", "a")
+        self.wait(600)
+        self.bot("a")["lastGameAt"] = self.ago(0)
+        self.bot("b")["lastGameAt"] = self.ago(5)
+        self.join("1v1", "b")
+        self.match("1v1", jitter=False)
+        self.assertEqual(self.tables, [["a", "b"]])
+
+    def test_a_bot_idle_thirty_minutes_seeds_first(self):
+        self.bots("4p", dict(LIVE_4P, new=1350.0), se={"new": None},
+                  catanrl={"lastGameAt": self.ago(31)})
+        self.join("4p", *LIVE_4P, "new")
+        self.match("4p", jitter=False)
+        self.assertEqual(self.tables[0][0], "catanrl")
+
+    def test_the_top_is_the_leaderboards_rank_1_waiting_or_not(self):
+        # a: seeded just now, 10 points at the top of those waiting, 5 below a
+        # leader rated 2000. b: seeded 30 minutes ago (1 point), 100 below a.
+        ratings = {"a": 1600, "b": 1500}
+        extra = {"a": {"lastSeededAt": self.ago(0)}, "b": {"lastSeededAt": self.ago(30)}}
+        self.bots("1v1", ratings, **extra)
+        self.join("1v1", "a", "b")
+        self.match("1v1", jitter=False)
+        self.assertEqual(self.tables, [["a", "b"]])
+
+        self.setUp()
+        self.bots("1v1", dict(ratings, leader=2000), leader={"rank1v1": 1}, **extra)
+        self.join("1v1", "a", "b")
+        self.match("1v1", jitter=False)
+        self.assertEqual(self.tables, [["b", "a"]])
+
+    def test_the_seed_is_recorded(self):
+        self.bots("4p", LIVE_4P)
+        self.join("4p", *LIVE_4P)
+        self.match("4p", jitter=False)
+        self.assertEqual(self.bot("nn-b")["lastSeededAt"], self.now.isoformat())
+        self.assertEqual([b for b in LIVE_4P if "lastSeededAt" in self.bot(b)], ["nn-b"])
+
+
+class ClosestTable(MatchmakerCase):
+    def test_a_low_rated_bot_is_kept_out_of_a_strong_table(self):
+        self.bots("4p", dict(LIVE_4P, low=900.0))
+        self.join("4p", "low", *LIVE_4P)
+        self.match("4p", jitter=False)
+        self.assertEqual(self.tables, [["nn-b", "ppo", "l12", "nn"]])
+
+    def test_the_table_ignores_the_others_priority(self):
+        # l13 has waited 29 minutes, but nn-b seeds and l13 is not among the
+        # closest to it
+        self.bots("4p", LIVE_4P, l13={"lastGameAt": self.ago(29)})
+        self.join("4p", *LIVE_4P)
+        self.match("4p", jitter=False)
+        self.assertEqual(self.tables, [["nn-b", "ppo", "l12", "nn"]])
 
     def test_tables_until_too_few_wait(self):
         self.bots("4p", {f"b{i}": 1500 + 10 * i for i in range(9)})
@@ -172,8 +235,9 @@ class ClosestTable(MatchmakerCase):
 
 class Rotation(MatchmakerCase):
     def rotate(self, ratings, rounds, se=None):
-        """Each round a table is seated, plays for ten minutes and queues again;
-        returns the tables and each bot's longest run of rounds sat out."""
+        """Each round a table is seated, plays for ten minutes and queues again
+        thirty seconds after it ends; returns the tables and each bot's longest
+        run of rounds sat out."""
         self.bots("4p", ratings, se=se)
         self.join("4p", *ratings)
         tables, sat_out, longest = [], dict.fromkeys(ratings, 0), dict.fromkeys(ratings, 0)
@@ -186,39 +250,28 @@ class Rotation(MatchmakerCase):
                 sat_out[bot] = 0 if bot in table else sat_out[bot] + 1
                 longest[bot] = max(longest[bot], sat_out[bot])
             self.wait(600)
-            self.join("4p", *table)
+            for bot in table:
+                self.bot(bot)["lastGameAt"] = self.now.isoformat()
             self.wait(30)
+            self.join("4p", *table)
         return tables, longest
 
     def test_six_bots_in_rotation(self):
-        # Every table of four adjacent in rating holds the middle two of six,
-        # so they play every round and the rest every other round (seated by
-        # queue order, every bot played two rounds in three). Nobody sits out
-        # more than two rounds running, the top and bottom bots never meet,
-        # and the tables are closer.
         rounds = 300
         tables, longest = self.rotate(LIVE_4P, rounds)
         played = {b: sum(b in t for t in tables) for b in LIVE_4P}
-        for bot, n in played.items():
-            self.assertGreaterEqual(n, rounds * 0.49, (bot, played))
-        self.assertEqual(played["l12"], rounds)
-        self.assertEqual(played["ppo"], rounds)
-        self.assertLessEqual(max(longest.values()), 2, longest)
+        seeded = {b: sum(t[0] == b for t in tables) for b in LIVE_4P}
+        # Every bot seeds. Nobody sits out more than four rounds: three to
+        # pass the 30-minute guard, and one more when another bot past it
+        # seeds first and its table leaves this one out. The top and bottom
+        # bots never meet, the top bot plays more than the bottom one, and the
+        # tables are closer than in queue order (350 on average).
+        self.assertTrue(all(seeded.values()), seeded)
+        self.assertLessEqual(max(longest.values()), 4, longest)
         self.assertFalse([t for t in tables if "nn-b" in t and "catanrl" in t])
+        self.assertGreater(played["nn-b"], played["catanrl"])
         spread = sum(max(LIVE_4P[b] for b in t) - min(LIVE_4P[b] for b in t) for t in tables)
-        self.assertLess(spread / rounds, 300)   # seated by queue order: 350 on average
-
-    def test_a_new_bot_seeds_ahead_of_bots_that_waited_a_little_longer(self):
-        # With no games, its uncertainty (PRIOR_SE, about five times theirs)
-        # outweighs up to about four minutes' more waiting: 246 x 60 against
-        # 50 x 180
-        ratings = dict(LIVE_4P, new=1350.0)
-        self.bots("4p", ratings, se={"new": None})
-        self.join("4p", *LIVE_4P)
-        self.wait(120)
-        self.join("4p", "new")
-        self.match("4p", jitter=False)
-        self.assertEqual(self.tables, [["new", "l13", "ppo", "l12"]])
+        self.assertLess(spread / rounds, 300)
 
 
 class StaleEntries(MatchmakerCase):
@@ -244,23 +297,24 @@ class StaleEntries(MatchmakerCase):
 
 class OneVersusOne(MatchmakerCase):
     def test_pairs_the_seed_with_the_nearest_rating(self):
+        # b seeds (the top), then f (just above a)
         self.bots("1v1", {"a": 1200, "b": 1700, "c": 1250, "f": 1210})
-        self.join("1v1", "a")
-        self.wait(10)
-        self.join("1v1", "b", "c", "f")
+        self.join("1v1", "a", "b", "c", "f")
         self.assertEqual(self.match("1v1", jitter=False), ["game-1", "game-2"])
-        self.assertEqual(self.tables, [["a", "f"], ["b", "c"]])
+        self.assertEqual(self.tables, [["b", "c"], ["f", "a"]])
         self.assertEqual(self.queued(), [])
 
     def test_a_bot_without_a_rating_counts_as_1500(self):
         self.bots("1v1", {"a": None, "b": 1050, "c": 1900})
         self.join("1v1", "a", "b", "c")
         self.match("1v1", jitter=False)
-        self.assertEqual(self.tables, [["a", "c"]])
+        self.assertEqual(self.tables, [["c", "a"]])
 
     def test_1v1_skips_the_bot_it_just_played(self):
         self.bots("1v1", {"a": 1500, "b": 1505, "c": 1700},
-                  a={"lastOpponentId": "b"}, b={"lastOpponentId": "a"})
+                  a={"lastOpponentId": "b"},
+                  b={"lastOpponentId": "a", "lastSeededAt": self.ago(0)},
+                  c={"lastSeededAt": self.ago(0)})
         self.join("1v1", "a", "b", "c")
         self.match("1v1", jitter=False)
         self.assertEqual(self.tables, [["a", "c"]])
@@ -271,7 +325,7 @@ class OneVersusOne(MatchmakerCase):
                   a={"lastOpponentId": "b"}, b={"lastOpponentId": "a"})
         self.join("1v1", "a", "b")
         self.match("1v1", jitter=False)
-        self.assertEqual(self.tables, [["a", "b"]])
+        self.assertEqual(sorted(self.tables[0]), ["a", "b"])
 
     def test_1v1_odd_queue_leaves_out_the_furthest_from_the_seed(self):
         self.bots("1v1", {"top": 1900, "x": 1500, "y": 1450})

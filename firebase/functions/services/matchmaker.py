@@ -1,4 +1,17 @@
-"""Matchmaking — queue management and game creation (Firestore-backed)."""
+"""Matchmaking — queue management and game creation (Firestore-backed).
+
+A pass builds a mode's games one at a time, in two steps:
+
+1. Pick the seed: the waiting bot with the highest seed priority
+   (`seed_priority`). The priority decides only which bot a game is built
+   around.
+2. Fill its table: the waiting bots that make the table of the smallest
+   rating spread with the seed (`_closest_run`), whatever their own priority.
+   In 1v1 that is the bot nearest the seed's rating.
+
+The seed is recorded on its bot document (`lastSeededAt`), and the pass goes
+on until too few bots are left waiting.
+"""
 
 from __future__ import annotations
 
@@ -11,9 +24,15 @@ import config as cfg
 from services.game_manager import create_game
 from services.rankings import PRIOR_SE
 
-# A bot's wait counts from one matchmaking pass (a minute) before it joined, so
-# the uncertainty of a bot that joined just before a pass still counts
-WAIT_FLOOR_SECONDS = 60.0
+# Seed priority, in points; a point is worth ten minutes of waiting
+SETTLED_SE = 50.0              # about a settled bot's rating standard error
+UNCERTAINTY_POINTS = 8.0       # per SETTLED_SE of standard error above that
+IDLE_MINUTES_PER_POINT = 10.0  # since its last game
+SEED_MINUTES_PER_POINT = 30.0  # since it last seeded a game
+SEED_MINUTES_CAP = 180.0       # never seeded counts as this
+TOP_POINTS = 10.0              # at the top of the leaderboard
+TOP_HALVING = 400.0            # rating points below the top that halve them
+GUARD_MINUTES = 30.0           # a bot this long without a game seeds first
 # Randomness added to 1v1 ratings when the seed's opponent is chosen, so the
 # same bots are not always paired. (A 3p or 4p table changes with its seed; the
 # randomness there could slip the top bot into the bottom bots' table.)
@@ -32,14 +51,43 @@ def run_matchmaking() -> list[str]:
     return game_ids
 
 
-def _seconds_waited(joined_at, now: datetime) -> float:
+def _minutes_since(at, now: datetime) -> float | None:
+    if not at:
+        return None
     try:
-        t = datetime.fromisoformat(str(joined_at).replace("Z", "+00:00"))
+        t = datetime.fromisoformat(str(at).replace("Z", "+00:00"))
     except ValueError:
-        return 0.0
+        return None
     if t.tzinfo is None:
         t = t.replace(tzinfo=timezone.utc)
-    return max((now - t).total_seconds(), 0.0)
+    return max((now - t).total_seconds() / 60, 0.0)
+
+
+def seed_priority(se: float, idle_minutes: float, seed_minutes: float | None,
+                  top_gap: float) -> tuple[int, float]:
+    """A waiting bot's priority to seed a game; the highest seeds.
+
+    `se` is its rating's standard error, `idle_minutes` the time since its
+    last game ended (or since it joined the queue, if later or it has never
+    played), `seed_minutes` the time since it last seeded a game (None if
+    never) and `top_gap` how far its rating is below the top of the
+    leaderboard. A bot idle for GUARD_MINUTES or more seeds first, the
+    longest idle first. Otherwise its points are the sum of
+
+      uncertainty  8 per 50 of standard error above 50 (a new bot, about 246:
+                   about 31)
+      idle         1 per 10 minutes since its last game
+      unseeded     1 per 30 minutes since it last seeded, up to 6
+      top          10 at the top of the leaderboard, halving every 400 below
+    """
+    if idle_minutes >= GUARD_MINUTES:
+        return (1, idle_minutes)
+    uncertainty = UNCERTAINTY_POINTS * max(se / SETTLED_SE - 1, 0.0)
+    idle = idle_minutes / IDLE_MINUTES_PER_POINT
+    unseeded = min(SEED_MINUTES_CAP if seed_minutes is None else seed_minutes,
+                   SEED_MINUTES_CAP) / SEED_MINUTES_PER_POINT
+    top = TOP_POINTS * 2 ** (-max(top_gap, 0.0) / TOP_HALVING)
+    return (0, uncertainty + idle + unseeded + top)
 
 
 def _closest_run(seed: str, others: list[str], size: int, rating: dict) -> list[str]:
@@ -55,19 +103,14 @@ def _closest_run(seed: str, others: list[str], size: int, rating: dict) -> list[
 
 
 def _match_mode(mode: str, players_needed: int, now: datetime | None = None) -> list[str]:
-    """Match players for a given mode. Returns created game IDs.
+    """Match players for a given mode (see the module docstring). Returns
+    created game IDs.
 
-    Each game is built around a seed: the waiting bot with the highest
-    uncertainty times wait, its rating's standard error (PRIOR_SE before its
-    first rating) times its seconds in the queue (plus WAIT_FLOOR_SECONDS).
-    The seed is joined by the waiting bots that, with it, make the table of
-    the smallest rating spread, so the table is as evenly matched as the
-    queue allows: a bot rated far below the rest spoils a strong table. In
-    1v1 that is the bot nearest the seed (ratings with some randomness), and
-    not the bot it just played if another is waiting. Uncertain bots are seeded
-    sooner, so their ratings settle, and any bot is seeded once it has
-    waited long enough. Bots in the middle of the ratings fit most tables
-    and play more often than those at either end."""
+    Uncertain bots seed sooner, so their ratings settle; bots near the top of
+    the leaderboard seed more often, so the strongest tables are played most;
+    no bot goes much more than GUARD_MINUTES without a game. Bots in the
+    middle of the ratings fit most tables and play more than those at either
+    end, which play mostly the games they seed."""
     db = _get_db()
     now = now or datetime.now(timezone.utc)
     elo_key = f"elo{mode}"
@@ -107,34 +150,47 @@ def _match_mode(mode: str, players_needed: int, now: datetime | None = None) -> 
             queue_id[bid] = qdoc.id
             joined_at[bid] = entry.get("joinedAt")
 
-    # Each bot's priority to seed a game, its rating and, for 1v1, its last
-    # opponent
-    priority = {}
-    rating = {}
-    last_opp = {}
+    bots = {}
     for bid in waiting:
         bot_doc = db.collection("bots").document(bid).get()
-        bdata = bot_doc.to_dict() if bot_doc.exists else {}
-        uncertainty = bdata.get(f"eloSe{mode}") or PRIOR_SE
-        waited = _seconds_waited(joined_at[bid], now) + WAIT_FLOOR_SECONDS
-        priority[bid] = uncertainty * waited
-        rating[bid] = bdata.get(elo_key) or 1500.0
-        if mode == "1v1":
-            rating[bid] += random.gauss(0, RATING_JITTER)
-        last_opp[bid] = bdata.get("lastOpponentId")
+        bots[bid] = bot_doc.to_dict() if bot_doc.exists else None
+    rating = {bid: (d or {}).get(elo_key) or 1500.0 for bid, d in bots.items()}
+
+    # The top of the leaderboard: the rank 1 bot's rating (the best waiting
+    # rating while no bot is ranked)
+    leader = list(db.collection("bots").where(f"rank{mode}", "==", 1).limit(1).get())
+    top = (leader[0].to_dict().get(elo_key) if leader else None) or max(rating.values())
+
+    priority = {}
+    for bid in waiting:
+        d = bots[bid] or {}
+        idle = max(m for m in (_minutes_since(d.get("lastGameAt"), now),
+                               _minutes_since(joined_at[bid], now), 0.0) if m is not None)
+        priority[bid] = seed_priority(
+            se=d.get(f"eloSe{mode}") or PRIOR_SE,
+            idle_minutes=idle,
+            seed_minutes=_minutes_since(d.get("lastSeededAt"), now),
+            top_gap=top - rating[bid])
+
+    # 1v1 opponents are chosen with some randomness in the ratings, and not
+    # the bot the seed just played (and that just played it) if another waits
+    if mode == "1v1":
+        rating = {bid: r + random.gauss(0, RATING_JITTER) for bid, r in rating.items()}
+    last_opp = {bid: (d or {}).get("lastOpponentId") for bid, d in bots.items()}
 
     game_ids = []
     while len(waiting) >= players_needed:
-        # max() keeps the first of equals: on a tie, the longest waiting
+        # max() keeps the first of equals: on a tie, the longest in the queue
         seed = max(waiting, key=lambda b: priority[b])
         others = [b for b in waiting if b != seed]
         if mode == "1v1" and len(others) > 1:
-            # Not the bot it just played (and that just played it)
             others = [b for b in others
                       if not (last_opp.get(seed) == b and last_opp.get(b) == seed)]
         group = [seed] + _closest_run(seed, others, players_needed, rating)
 
         game_ids.append(create_game(mode, group))
+        if bots[seed] is not None:
+            db.collection("bots").document(seed).update({"lastSeededAt": now.isoformat()})
         for bid in group:
             db.collection("queue").document(queue_id[bid]).delete()
         waiting = [b for b in waiting if b not in group]

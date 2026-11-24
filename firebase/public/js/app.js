@@ -1518,6 +1518,14 @@ Authorization: Bearer your-api-key</pre>
     <pre>GET /api/queue/status
 Authorization: Bearer your-api-key</pre>
 
+    <h3>How games are matched</h3>
+    <p>Every minute the matchmaker builds games from the waiting bots, one game at a time, in two steps. First it
+       picks a <strong>seed</strong>: the waiting bot with the most points, for an uncertain rating (a new bot's),
+       for time since its last game, for time since it last seeded a game, and for a rating near the top of the
+       leaderboard. A bot that has gone 30 minutes without a game seeds first. Then the seed is joined by the
+       waiting bots closest to it in rating (in 1v1, the nearest), whatever their own points, so games are evenly
+       matched. The points and what they mean for your bot: <a href="#/ratings">How Ratings Work</a>.</p>
+
     <h3>Ratings</h3>
     <p>Every 15 minutes the server fits Bradley-Terry ratings to the games among the bots that played in the
        last ${ACTIVE_DAYS} days. A bot's rating is the one at which its expected wins equal its actual wins against
@@ -1533,9 +1541,6 @@ Authorization: Bearer your-api-key</pre>
       <li>A bot that has not played for ${ACTIVE_DAYS} days is left out, with its games, and loses its rank. It
           keeps its last rating, which matchmaking starts from when it returns.</li>
       <li>A bot's whole record counts. To rate a new version from scratch, register it as a new bot.</li>
-      <li>Matchmaking builds each game around the waiting bot with the highest &plusmn; times time in the queue,
-          so new bots play often and nobody waits long, and fills it with the waiting bots that make the
-          closest-rated table with it (in 1v1, the bot nearest its rating).</li>
     </ul>
     <p>The details, with what each rating gap means as a chance of winning: <a href="#/ratings">How Ratings Work</a>.</p>
 
@@ -2493,7 +2498,7 @@ function renderRatings() {
   <div class="guide">
     <h1 style="font-size:1.5rem; margin-bottom:0.5rem;">How Ratings Work</h1>
     <p style="color:var(--muted); margin-bottom:1.5rem;">
-      How the leaderboards rate and rank bots. <a href="#/guide">&larr; Back to guide</a>
+      How the leaderboards rate and rank bots, and how games are matched. <a href="#/guide">&larr; Back to guide</a>
     </p>
 
     <p>Every 15 minutes the server fits <strong>Bradley-Terry ratings</strong> to the games among the bots that
@@ -2536,18 +2541,48 @@ function renderRatings() {
       <li>An idle bot loses its rank and keeps its last rating. Matchmaking starts from that rating if it returns.</li>
     </ul>
 
+    <h2>Matchmaking</h2>
+    <p>Every minute the matchmaker builds games from the bots waiting in each mode's queue, one game at a time, in
+       two steps.</p>
+    <ol>
+      <li><strong>Pick the seed.</strong> The waiting bot with the most points seeds the game:
+        <table>
+          <tr><th>For</th><th>Points</th></tr>
+          <tr><td>An uncertain rating</td><td>8 for every 50 of &plusmn; above 50 (a new bot, about
+              &plusmn;246: about 31)</td></tr>
+          <tr><td>Time since its last game</td><td>1 per 10 minutes</td></tr>
+          <tr><td>Time since it last seeded a game</td><td>1 per 30 minutes, up to 6 (3 hours, or never)</td></tr>
+          <tr><td>A rating near the top of the leaderboard</td><td>10 at the rank 1 bot's rating, halving every
+              400 below it</td></tr>
+        </table>
+        A bot that has gone 30 minutes without a game seeds ahead of all of these, the longest idle first.</li>
+      <li><strong>Fill its table.</strong> The seed is joined by the waiting bots that make the table of the
+          smallest rating spread with it: the bots next to it in rating. Their own points play no part. In 1v1 the
+          seed is paired with the waiting bot nearest its rating, with some randomness so the same pairs do not
+          always meet, and not the bot it just played if another is waiting.</li>
+    </ol>
+    <p>The next seed is then picked from the bots still waiting, until too few are left for a game. What this
+       means for a bot:</p>
+    <ul>
+      <li>A new bot seeds most of its first games, so its rating settles quickly. As its &plusmn; narrows it takes
+          its turn with the rest.</li>
+      <li>Games are evenly matched: a bot rated far below the rest is not seated at a strong table.</li>
+      <li>Bots near the top of the leaderboard seed more often, so the strongest tables are played most.</li>
+      <li>Bots in the middle of the ratings fit most tables and play the most. A bot at either end plays mostly
+          the games it seeds: near the top, often; near the bottom, when its turn to seed comes round or it has
+          gone 30 minutes without a game. With one table running at a time, a bot past 30 minutes can wait one
+          more game while another seeds first.</li>
+      <li>Time since its last game runs from the end of that game, or from when the bot joined the queue if that
+          is later. A bot back after a break seeds its first game.</li>
+    </ul>
+    <p>The code is <a href="https://github.com/bovard/open-hex/blob/main/firebase/functions/services/matchmaker.py">services/matchmaker.py</a>.</p>
+
     <h2>For bot authors</h2>
     <ul>
       <li>A bot's whole record counts. To rate a new version from scratch, register it as a new bot rather than
           updating the old one in place.</li>
-      <li>Matchmaking builds each game around a seed: the waiting bot with the highest &plusmn; times time in
-          the queue. A new bot's &plusmn; is wide, so it is seeded ahead of bots that have waited a little longer
-          and plays often until its rating settles; any bot is seeded once it has waited long enough. The seed
-          is joined by the waiting bots that make the table of the smallest rating spread with it, so games are
-          evenly matched: a bot rated far below the rest is not seated at a strong table. Bots in the middle of
-          the ratings fit most tables and play more often than those at either end. In 1v1 the seed is paired
-          with the waiting bot nearest its rating, with some randomness, and not the bot it just played if
-          another is waiting.</li>
+      <li>How often your bot plays, and against whom, is set by matchmaking (above): a new bot plays often at
+          first, and every game is against the bots closest to the seed in rating.</li>
       <li>The API reports <code>elo_&lt;mode&gt;</code>, <code>elo_se_&lt;mode&gt;</code> (the &plusmn;) and
           <code>rank_&lt;mode&gt;</code> (<code>null</code> while unranked) from <code>GET /api/bots/me</code>.
           <code>GET /api/leaderboard/&lt;mode&gt;</code> lists ranked bots by rank, then the rest by rating, with
