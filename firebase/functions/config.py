@@ -7,7 +7,8 @@
 MODES = {"1v1": 2, "3p": 3, "4p": 4}
 ACTION_TIMEOUT_SECONDS = 60
 # A seat past its deadline has the pending move made for it and a strike
-# recorded; this many strikes in a row abort the game (1: abort at once).
+# recorded; this many strikes in a row take the seat out: it leaves a 3p or 4p
+# game while two other seats play on, otherwise the game is aborted.
 TIMEOUT_STRIKES = 3
 RENAME_COOLDOWN_SECONDS = 24 * 60 * 60   # a bot may change its name once a day
 INITIAL_ELO = 1500.0
