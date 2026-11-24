@@ -422,6 +422,11 @@
           ]
         },
         "nextTradeId": { "type": "integer" },
+        "leftPlayers": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/PlayerColor" },
+          "description": "Seats that left the game, in the order they left. Their turns are skipped and they make no further move."
+        },
         "setupRound": { "type": "integer" },
         "setupIndex": { "type": "integer" },
         "setupPlacedSettlement": { "type": "boolean" },
@@ -524,6 +529,7 @@
         "longestRoad",
         "largestArmy",
         "turnStarted",
+        "playerLeft",
         "gameWon"
       ]
     },

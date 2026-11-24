@@ -94,6 +94,7 @@ class GameState:
     winner: PlayerColor | None = None
     balanced_dice: BalancedDice | None = None
     next_trade_id: int = 1
+    left_players: list[PlayerColor] = field(default_factory=list)   # seats that left (leaveGame)
 
     # Setup tracking
     setup_round: int = 1            # 1 = first round, 2 = second round
@@ -106,6 +107,11 @@ class GameState:
             if p.color == color:
                 return p
         raise ValueError(f"No player with color {color}")
+
+    def seats_in_play(self) -> list[PlayerColor]:
+        """The seats still playing, in turn order: every seat but those
+        that left the game."""
+        return [c for c in self.turn_order if c not in self.left_players]
 
     def players_to_act(self) -> list[PlayerColor]:
         """Players the game is waiting on: the players still to discard

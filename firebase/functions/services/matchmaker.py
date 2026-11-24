@@ -68,16 +68,16 @@ def _match_mode(mode: str, players_needed: int) -> list[str]:
                     i += 1
                     continue
 
-        # Check none are in an active game already
+        # Check none are in an active game already (one it has left does not count)
         skip = False
         for bid in bot_ids:
-            active = (
-                db.collection("games")
+            active = [
+                g for g in db.collection("games")
                 .where("status", "==", "active")
                 .where("playerBotIds", "array_contains", bid)
-                .limit(1)
                 .get()
-            )
+                if bid not in (g.to_dict().get("leftBotIds") or [])
+            ]
             if len(active) > 0:
                 skip = True
                 # Remove stale queue entry

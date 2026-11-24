@@ -360,6 +360,7 @@ The complete game state at any point in time. This is the authoritative represen
   "longestRoadPlayer": null,
   "largestArmyPlayer": null,
   "winner": null,
+  "leftPlayers": [],
   "balancedDice": {
     "deck": [[1,1],[3,4],[6,2]],
     "recentRolls": [6, 8, 7, 5, 9],
@@ -401,6 +402,7 @@ Each entry in the `players` array contains both private and public information.
 | `dice` | DiceResult \| null | Last dice roll, null if not yet rolled |
 | `playedDevCardThisTurn` | boolean | Whether a dev card was played this turn |
 | `tradesProposedThisTurn` | integer | Number of offers made this turn, counter-offers included |
+| `leftPlayers` | [string] | Seats that left the game, in the order they left (section 9, [Leaving the Game](#leaving-the-game)). Their turns are skipped |
 
 ### Trades
 
@@ -1033,6 +1035,14 @@ Emitted when Largest Army changes hands.
 {"type": "turnEnded", "player": "red", "turnNumber": 12}
 ```
 
+#### playerLeft
+
+A seat left the game (section 9, [Leaving the Game](#leaving-the-game)). `resources` are the cards it held, returned to the bank; the event is public. A `longestRoadAwarded` or `largestArmyAwarded` event follows if it held an award, then `turnEnded` if it was its turn (after the other seats' discards, when its 7 left them owing one).
+
+```json
+{"type": "playerLeft", "player": "orange", "resources": {"wood": 2, "ore": 1}}
+```
+
 ### Game End
 
 #### gameWon
@@ -1104,6 +1114,7 @@ When a 7 is rolled (or a knight is played):
 - Requires a minimum of **3 knight cards played**
 - Awarded to the first player to reach 3
 - Transfers to another player only if they have **strictly more** knights played
+- With nobody holding it (only after its holder left the game, below), a player takes it with at least 3 knights and strictly more than every other seat in play
 - Worth **2 VP**
 
 ### Winning
@@ -1111,6 +1122,19 @@ When a 7 is rolled (or a knight is played):
 - A player wins when their total VP reaches the `victoryPoints` threshold
 - Victory is checked at the **end of any action on the player's own turn**
 - VP sources: settlements (1 each), cities (2 each), Victory Point cards (1 each), Longest Road (2), Largest Army (2)
+
+### Leaving the Game
+
+A seat that the server takes out of a game of three or more, while at least two other seats play on, leaves it (the ladder: a seat that misses its deadline three times in a row). Play goes on as if it had never been there:
+
+- Its resource cards go back to the bank (`playerLeft`). It never receives a card again: its settlements and cities stay on the board, still blocking building and roads, but produce nothing, and the short-bank rule counts only the seats in play.
+- It is nobody's steal target, owes no discard (a discard it owed is dropped), and no offer is put to it: an offer closes as `allRejected` once every seat in play has rejected it.
+- Longest Road or Largest Army, if it held one, is decided again among the seats in play: Longest Road as when a holder's road is broken (the longest road of 5 or more, nobody on a tie); Largest Army to the most knights played, 3 or more, nobody on a tie.
+- Its turns are skipped. If it was its turn, the turn ends (`turnEnded`), whatever was pending, except a discard: the discards its 7 left other seats owing are still made, and its turn ends after the last of them, with the robber left where it is. During setup it places nothing more, and the first turn goes to the first seat in play.
+- Balanced dice count only the seats in play.
+- It makes no further move: any action from it fails with `You have left this game`.
+
+The server makes the move as `{"type": "leaveGame", "player": "orange"}`; a bot cannot send it. With only two seats in play a seat cannot leave; the server ends the game instead.
 
 ---
 
@@ -1202,7 +1226,7 @@ In a multiplayer game, not all state is visible to all players. The spec defines
 - `playedDevCards` — played development cards
 - `knightsPlayed`, `longestRoadLength`
 - `publicVictoryPoints`
-- `currentPlayer`, `turnOrder`, `turnNumber`
+- `currentPlayer`, `turnOrder`, `turnNumber`, `leftPlayers`
 - `trades` — every standing offer and every seat's answer to it
 - `balancedDice.remaining` — the number of dice cards left
 - All event types and fields not listed as private above

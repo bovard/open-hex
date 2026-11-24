@@ -209,6 +209,9 @@ def process_action(game_id: str, bot_id: str, action_dict: dict,
     The action log names the bot as its seat does, the name the game was
     created with, so a bot renamed mid-game keeps one name in that game."""
     action_dict = resolve_action_indices(action_dict)
+    if action_dict.get("type") == "leaveGame" and not auto:
+        # Only the server takes a seat out of a game (`check_timeouts`)
+        return {"success": False, "events": [], "error": "Unknown action type: leaveGame"}
 
     # Sanitize duration_ms: must be a non-negative integer
     if duration_ms is not None:
@@ -338,6 +341,9 @@ def process_action(game_id: str, bot_id: str, action_dict: dict,
             "nextEventSeq": next_seq + len(result.events),
             "durationStats": dur_stats,
         }
+        if action.type == "leaveGame":
+            # Its active games no longer hold the bot back from the queue
+            update["leftBotIds"] = list(game.get("leftBotIds") or []) + [bot_id]
         for public_field in ("stateJson", "seed"):
             if public_field in game:
                 update[public_field] = firestore.DELETE_FIELD
@@ -565,10 +571,11 @@ def _save_replay_to_gcs(game_id: str) -> None:
 def check_timeouts() -> int:
     """Act for the seats past their action deadline, as colonist.io does: the
     move the game waits on is made for the seat (`OpenHexEngine.default_action`)
-    and a strike recorded; `cfg.TIMEOUT_STRIKES` strikes in a row, or no
-    legal move to make, abort the game with that seat at fault. A move of
-    the seat's own clears its strikes (`process_action`). Returns the count
-    of games aborted."""
+    and a strike recorded. `cfg.TIMEOUT_STRIKES` strikes in a row, or no
+    legal move to make, take the seat out: while two other seats remain it
+    leaves the game (`leaveGame`) and play goes on without it; otherwise the
+    game is aborted with that seat at fault. A move of the seat's own clears
+    its strikes (`process_action`). Returns the count of games aborted."""
     db = _get_db()
     now = _now_iso()
 
@@ -616,14 +623,29 @@ def check_timeouts() -> int:
 
         if game["status"] != "active":
             continue   # the move made for the seat ended the game
+        game_ref.update({"timeoutStrikes": strikes})
         if not struck_out:
-            game_ref.update({"timeoutStrikes": strikes})
             continue
 
-        # Find winner: the highest VP among the seats not at fault
-        other_players = [p for p in game["players"] if p["color"] not in struck_out]
+        # With two other seats still playing, the seats struck out leave and
+        # the game goes on without them
+        in_play = [c.value for c in state.seats_in_play()]
+        if len([c for c in in_play if c not in struck_out]) >= 2:
+            leaving = [c for c in in_play if c in struck_out]
+            if all(process_action(game_id, seats[c]["botId"], {"type": "leaveGame"},
+                                  auto=True)["success"] for c in leaving):
+                continue
+            game = game_ref.get().to_dict()
+            if game["status"] != "active":
+                continue   # a leave ended the game: an award it held made another seat's win
+            state = from_json(json.loads(load_state_json(game_id, game, db)), GameState)
+            in_play = [c.value for c in state.seats_in_play()]
+
+        # Find winner: the highest VP among the seats in play not at fault
+        other_players = [p for p in game["players"]
+                         if p["color"] in in_play and p["color"] not in struck_out]
         if not other_players:
-            other_players = list(game["players"])
+            other_players = [p for p in game["players"] if p["color"] in in_play]
         best = max(other_players, key=lambda p: state.compute_vp(PlayerColor(p["color"])))
         winner_bot_id = best["botId"]
         winner_name = best["name"]
