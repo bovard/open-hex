@@ -188,6 +188,33 @@ class Discards(LeavingCase):
         s, _ = self.leave(s, WHITE)
         self.assertEqual((s.current_player, s.pending_action.type), (RED, "moveRobber"))
 
+    def test_its_seven_still_costs_the_others_their_discards(self):
+        # RED rolled the 7 and leaves before discarding: BLUE still discards,
+        # then RED's turn ends with the robber where it was
+        s = main_phase()
+        s.dice = DiceResult(3, 4)
+        robber = s.board.robber
+        s.pending_action = PendingAction(type="discardResources", players={RED: 7, BLUE: 7})
+        s, events = self.leave(s, RED)
+        self.assertEqual([e["type"] for e in events], ["playerLeft"])
+        self.assertEqual(s.pending_action.players, {BLUE: 7})
+        self.assertEqual(s.players_to_act(), [BLUE])
+        s, events = self.act(s, BLUE, "discardResources",
+                             resources={WOOD: 3, BRICK: 3, SHEEP: 1})
+        self.assertEqual([e["type"] for e in events], ["resourcesDiscarded", "turnEnded"])
+        self.assertEqual(events[-1], {"type": "turnEnded", "player": "red", "turnNumber": 1})
+        self.assertEqual(sum(s.get_player(BLUE).hand.values()), 8)
+        self.assertEqual((s.current_player, s.pending_action.type, s.board.robber),
+                         (BLUE, "rollDice", robber))
+
+    def test_its_turn_ends_when_it_was_the_last_to_discard(self):
+        s = main_phase()
+        s.dice = DiceResult(3, 4)
+        s.pending_action = PendingAction(type="discardResources", players={RED: 7})
+        s, events = self.leave(s, RED)
+        self.assertEqual([e["type"] for e in events], ["playerLeft", "turnEnded"])
+        self.assertEqual((s.current_player, s.pending_action.type), (BLUE, "rollDice"))
+
 
 class Awards(LeavingCase):
     def rings(self, s, colors):
@@ -369,6 +396,9 @@ class StrikeOut(unittest.TestCase):
         self.made = []
 
         def process_action(game_id, bot_id, action_dict, *, duration_ms=None, auto=False):
+            # As the real one: no move in a finished game, and a win completes it
+            if store["game"]["status"] != "active":
+                return {"success": False, "events": [], "error": "Game is not active"}
             color = bot_id.removeprefix("bot-")
             s = from_json(json.loads(store["state"]), GameState)
             r = OpenHexEngine(rng=random.Random(0)).execute_action(
@@ -376,6 +406,10 @@ class StrikeOut(unittest.TestCase):
             self.made.append((color, action_dict["type"]))
             if r.success:
                 store["state"] = json.dumps(to_json(r.state))
+                if r.state.winner is not None:
+                    store["game"].update(status="completed",
+                                         winnerBotId=f"bot-{r.state.winner.value}")
+                    self.records(game_id)
             return {"success": r.success, "events": [], "error": r.error}
 
         db = mock.MagicMock()
@@ -424,6 +458,30 @@ class StrikeOut(unittest.TestCase):
         aborted, game, _ = self.check_timeouts(s, {"bot-red": 2})
         self.assertEqual((aborted, self.made), (1, []))
         self.assertEqual(game["winnerBotId"], "bot-blue")
+
+    def test_a_leave_that_wins_the_game_for_another_seat_is_not_aborted(self):
+        # RED and BLUE strike out on their discards together. RED leaving
+        # passes Largest Army to WHITE, on its turn and at 8 VP: WHITE wins,
+        # and the game stays won, not aborted, with its result counted once.
+        s = main_phase()
+        s.current_player = WHITE
+        s.dice = DiceResult(3, 4)
+        s.pending_action = PendingAction(type="discardResources", players={RED: 7, BLUE: 7})
+        s.get_player(RED).knights_played, s.largest_army_player = 4, RED
+        s.get_player(WHITE).knights_played = 3
+        spots = []
+        for tile in s.board.tiles:
+            for v in tile.location.vertices():
+                if all(v != w and v not in w.adjacent_vertices() for w in spots):
+                    spots.append(v)
+        s.board.cities += [VertexBuilding(vertex=v, player=WHITE) for v in spots[:4]]
+        self.assertEqual(s.compute_vp(WHITE), 8)
+        aborted, game, s = self.check_timeouts(s, {"bot-red": 2, "bot-blue": 2})
+        self.assertEqual(aborted, 0)
+        self.assertEqual(self.made, [("red", "leaveGame")])
+        self.assertEqual((game["status"], game["winnerBotId"]), ("completed", "bot-white"))
+        self.assertEqual(s.winner, WHITE)
+        self.assertEqual(self.records.call_count, 1)
 
     def test_bots_cannot_leave_a_game(self):
         with mock.patch.object(self.gm, "_get_db", side_effect=AssertionError("no db call")):

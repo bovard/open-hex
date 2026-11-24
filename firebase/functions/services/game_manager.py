@@ -636,6 +636,8 @@ def check_timeouts() -> int:
                                   auto=True)["success"] for c in leaving):
                 continue
             game = game_ref.get().to_dict()
+            if game["status"] != "active":
+                continue   # a leave ended the game: an award it held made another seat's win
             state = from_json(json.loads(load_state_json(game_id, game, db)), GameState)
             in_play = [c.value for c in state.seats_in_play()]
 

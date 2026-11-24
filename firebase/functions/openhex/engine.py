@@ -1172,11 +1172,16 @@ class OpenHexEngine:
         # Remove this player from pending discards
         del s.pending_action.players[a.player]
         if not s.pending_action.players:
-            self._after_discards(s)
+            self._after_discards(s, events)
 
-    def _after_discards(self, s: GameState):
-        # The robber next, unless every hex is protected (friendly robber): then it stays
+    def _after_discards(self, s: GameState, events: list[Event]):
         mover = s.current_player
+        if mover in s.left_players:
+            # The seat that rolled the 7 left while the others discarded:
+            # nobody moves the robber, and its turn ends
+            self._exec_end_turn(s, Action(type="endTurn", player=mover), events)
+            return
+        # The robber next, unless every hex is protected (friendly robber): then it stays
         s.pending_action = PendingAction(type="moveRobber") if mover and self._robber_has_legal_hex(s, mover) else None
 
     def _exec_place_free_road(self, s: GameState, a: Action, events: list[Event]):
@@ -1225,7 +1230,8 @@ class OpenHexEngine:
         Play goes on as if it had never been there: its cards go back to the
         bank, its buildings stay on the board but produce nothing, an award
         it held goes to whoever else qualifies, a discard it owed is dropped,
-        and its turn, if it was its turn, ends."""
+        and its turn, if it was its turn, ends: at once, or once the other
+        seats have made the discards its 7 left them owing."""
         player = s.get_player(a.player)
         returned = {r: n for r, n in player.hand.items() if n > 0}
         self._return_to_bank(s, returned)
@@ -1249,12 +1255,14 @@ class OpenHexEngine:
         if pa is not None and pa.type == "discardResources" and a.player in (pa.players or {}):
             del pa.players[a.player]
             if not pa.players:
-                self._after_discards(s)
+                self._after_discards(s, events)   # ends its turn, if it was its turn
         if s.current_player == a.player:
             if s.is_setup_phase:
                 s.setup_placed_settlement = False
                 s.last_setup_settlement = None
                 self._advance_setup(s)
+            elif s.pending_action is not None and s.pending_action.type == "discardResources":
+                pass   # the others still discard for its 7; then its turn ends (_after_discards)
             else:
                 self._exec_end_turn(s, Action(type="endTurn", player=a.player), events)
 
@@ -1451,7 +1459,7 @@ class OpenHexEngine:
     # -----------------------------------------------------------------------
 
     def _check_victory(self, s: GameState, events: list[Event]):
-        if s.is_setup_phase or s.winner is not None:
+        if s.is_setup_phase or s.winner is not None or s.current_player in s.left_players:
             return
         vp = s.compute_vp(s.current_player)
         if vp >= s.config.victory_points:

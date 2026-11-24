@@ -1037,7 +1037,7 @@ Emitted when Largest Army changes hands.
 
 #### playerLeft
 
-A seat left the game (section 9, [Leaving the Game](#leaving-the-game)). `resources` are the cards it held, returned to the bank; the event is public. A `longestRoadAwarded` or `largestArmyAwarded` event follows if it held an award, then `turnEnded` if it was its turn.
+A seat left the game (section 9, [Leaving the Game](#leaving-the-game)). `resources` are the cards it held, returned to the bank; the event is public. A `longestRoadAwarded` or `largestArmyAwarded` event follows if it held an award, then `turnEnded` if it was its turn (after the other seats' discards, when its 7 left them owing one).
 
 ```json
 {"type": "playerLeft", "player": "orange", "resources": {"wood": 2, "ore": 1}}
@@ -1130,7 +1130,7 @@ A seat that the server takes out of a game of three or more, while at least two 
 - Its resource cards go back to the bank (`playerLeft`). It never receives a card again: its settlements and cities stay on the board, still blocking building and roads, but produce nothing, and the short-bank rule counts only the seats in play.
 - It is nobody's steal target, owes no discard (a discard it owed is dropped), and no offer is put to it: an offer closes as `allRejected` once every seat in play has rejected it.
 - Longest Road or Largest Army, if it held one, is decided again among the seats in play: Longest Road as when a holder's road is broken (the longest road of 5 or more, nobody on a tie); Largest Army to the most knights played, 3 or more, nobody on a tie.
-- Its turns are skipped. If it was its turn, the turn ends (`turnEnded`), whatever was pending. During setup it places nothing more, and the first turn goes to the first seat in play.
+- Its turns are skipped. If it was its turn, the turn ends (`turnEnded`), whatever was pending, except a discard: the discards its 7 left other seats owing are still made, and its turn ends after the last of them, with the robber left where it is. During setup it places nothing more, and the first turn goes to the first seat in play.
 - Balanced dice count only the seats in play.
 - It makes no further move: any action from it fails with `You have left this game`.
 

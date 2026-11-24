@@ -2426,7 +2426,7 @@ function renderEventsReference() {
        back to the bank; its buildings stay but produce nothing, nobody can rob it or trade with it, and its turns
        are skipped. An award it held is decided again among the other seats (a <code>longestRoadAwarded</code> or
        <code>largestArmyAwarded</code> event follows, with no player on a tie), then <code>turnEnded</code> if it
-       was its turn.</p>
+       was its turn (once the other seats have discarded, if its 7 left them owing a discard; the robber stays put).</p>
     <pre>{
   "type": "playerLeft",
   "player": "orange",
